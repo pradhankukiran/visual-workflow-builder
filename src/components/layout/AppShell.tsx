@@ -5,6 +5,7 @@ import Sidebar from '@/components/layout/Sidebar';
 import ConfigPanel from '@/components/layout/ConfigPanel';
 import WorkflowCanvas from '@/components/canvas/WorkflowCanvas';
 import ExecutionLog from '@/components/execution/ExecutionLog';
+import ExecutionHistory from '@/components/execution/ExecutionHistory';
 import ToastContainer from '@/components/toast/ToastContainer';
 import { useAppSelector } from '@/app/hooks';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
@@ -55,6 +56,7 @@ export default function AppShell() {
 
           {/* Execution Log (collapsible bottom panel) */}
           <ExecutionLog />
+          <ExecutionHistory />
         </div>
       </div>
 

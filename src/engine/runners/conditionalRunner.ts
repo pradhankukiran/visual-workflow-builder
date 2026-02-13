@@ -101,8 +101,13 @@ function evaluateCondition(
 
     case 'matches': {
       try {
-        const regex = new RegExp(expectedValue);
-        result = regex.test(String(actualValue));
+        // H8: ReDoS protection — cap pattern and input length
+        if (expectedValue.length > 200 || String(actualValue).length > 10_000) {
+          result = false;
+        } else {
+          const regex = new RegExp(expectedValue);
+          result = regex.test(String(actualValue));
+        }
       } catch {
         result = false;
       }

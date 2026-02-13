@@ -15,6 +15,7 @@ import { persistConfig } from './persistConfig';
 import { listenerMiddleware } from './listenerMiddleware';
 import { historyMiddleware } from '../features/history/historyMiddleware';
 import { workflowLibraryApi } from '../features/workflowLibrary/workflowLibraryApi';
+import { executionApi } from '../features/execution/executionApi';
 
 // ─── Persisted Reducer ───────────────────────────────────────────────────────
 
@@ -33,7 +34,8 @@ export const store = configureStore({
     })
       .prepend(listenerMiddleware.middleware)
       .concat(historyMiddleware)
-      .concat(workflowLibraryApi.middleware),
+      .concat(workflowLibraryApi.middleware)
+      .concat(executionApi.middleware),
   devTools: true,
 });
 

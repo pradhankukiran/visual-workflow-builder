@@ -7,13 +7,15 @@ import {
   removeEdge,
   updateNodeData,
   onConnect,
-  loadWorkflow,
 } from '../workflow/workflowSlice';
 import { captureSnapshot, type WorkflowSnapshot } from './historyActions';
 
 /**
  * Matcher that identifies workflow actions which should trigger a
  * history snapshot capture.
+ *
+ * M16: loadWorkflow is excluded — loading a different workflow should not
+ * create undo entries (prevents cross-workflow undo).
  */
 const isHistoryTriggerAction = isAnyOf(
   addNode,
@@ -22,7 +24,6 @@ const isHistoryTriggerAction = isAnyOf(
   removeEdge,
   updateNodeData,
   onConnect,
-  loadWorkflow,
 );
 
 /**

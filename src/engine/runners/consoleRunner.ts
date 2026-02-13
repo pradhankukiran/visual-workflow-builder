@@ -56,13 +56,15 @@ function formatAsTable(data: unknown): string {
       return JSON.stringify(data, null, 2);
     }
 
-    // Calculate column widths
+    // L11: Calculate column widths without Math.max(...spread) to avoid RangeError
     const colWidths = keys.map((key) => {
-      const values = data.map((item) => {
+      let max = key.length;
+      for (const item of data) {
         const val = (item as Record<string, unknown>)[key];
-        return val !== undefined ? String(val) : '';
-      });
-      return Math.max(key.length, ...values.map((v) => v.length));
+        const len = val !== undefined ? String(val).length : 0;
+        if (len > max) max = len;
+      }
+      return max;
     });
 
     // Build header
@@ -87,7 +89,10 @@ function formatAsTable(data: unknown): string {
     const entries = Object.entries(data as Record<string, unknown>);
     if (entries.length === 0) return '(empty object)';
 
-    const maxKeyLen = Math.max(...entries.map(([k]) => k.length));
+    let maxKeyLen = 0;
+    for (const [k] of entries) {
+      if (k.length > maxKeyLen) maxKeyLen = k.length;
+    }
     return entries
       .map(([key, value]) => `${key.padEnd(maxKeyLen)} | ${typeof value === 'object' ? JSON.stringify(value) : String(value)}`)
       .join('\n');

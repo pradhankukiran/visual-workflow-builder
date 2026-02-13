@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { redis, WORKFLOW_INDEX_KEY, workflowMetaKey, workflowDataKey } from '../_lib/redis.js';
+import { isValidId } from '../_lib/validation.js';
 import type { Workflow, WorkflowMetadata } from '../_lib/types.js';
 
 /**
@@ -48,6 +49,19 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: { message: 'Missing required fields: id, name', code: 'VALIDATION_ERROR' } });
   }
 
+  // H6: Validate ID format
+  if (!isValidId(body.id)) {
+    return res.status(400).json({ error: { message: 'Invalid workflow ID format', code: 'VALIDATION_ERROR' } });
+  }
+
+  // M3: Check for duplicate ID
+  const exists = await redis.exists(workflowDataKey(body.id));
+  if (exists) {
+    return res.status(409).json({ error: { message: 'Workflow with this ID already exists', code: 'DUPLICATE' } });
+  }
+
+  const now = new Date().toISOString();
+
   const workflow: Workflow = {
     id: body.id,
     name: body.name,
@@ -55,8 +69,8 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
     nodes: body.nodes ?? [],
     edges: body.edges ?? [],
     viewport: body.viewport ?? { x: 0, y: 0, zoom: 1 },
-    createdAt: body.createdAt ?? new Date().toISOString(),
-    updatedAt: body.updatedAt ?? new Date().toISOString(),
+    createdAt: now, // Always set server-side
+    updatedAt: now, // Always set server-side
     tags: body.tags ?? [],
     isTemplate: body.isTemplate ?? false,
   };

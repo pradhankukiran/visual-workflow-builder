@@ -81,6 +81,11 @@ export async function runLoop(
           return { iterations: i, results, breakReason: 'aborted' };
         }
 
+        // M18: Yield to event loop periodically to avoid blocking UI
+        if (i > 0 && i % 100 === 0) {
+          await new Promise<void>((r) => setTimeout(r, 0));
+        }
+
         // Update context variables so breakCondition can observe iteration state
         context.setVariable('$loopIndex', i);
         context.setVariable('$loopItem', items[i]);
@@ -104,6 +109,11 @@ export async function runLoop(
     // Check abort
     if (context.isAborted()) {
       return { iterations: i, results, breakReason: 'aborted' };
+    }
+
+    // M18: Yield to event loop periodically to avoid blocking UI
+    if (i > 0 && i % 100 === 0) {
+      await new Promise<void>((r) => setTimeout(r, 0));
     }
 
     // Update context variables so breakCondition can observe iteration state

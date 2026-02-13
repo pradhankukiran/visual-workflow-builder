@@ -134,13 +134,25 @@ const workflowSlice = createSlice({
     /** Apply React Flow node changes (drag, select, remove, etc.). */
     onNodesChange(state, action: PayloadAction<NodeChange<WorkflowNode>[]>) {
       state.nodes = applyNodeChanges(action.payload, state.nodes);
-      state.isDirty = true;
+      // M15: Only mark dirty for structural changes, not select/dimensions
+      const hasStructuralChange = action.payload.some(
+        (c) => c.type === 'remove' || c.type === 'position' || c.type === 'add' || c.type === 'replace',
+      );
+      if (hasStructuralChange) {
+        state.isDirty = true;
+      }
     },
 
     /** Apply React Flow edge changes (select, remove, etc.). */
     onEdgesChange(state, action: PayloadAction<EdgeChange<WorkflowEdge>[]>) {
       state.edges = applyEdgeChanges(action.payload, state.edges);
-      state.isDirty = true;
+      // M15: Only mark dirty for structural changes, not select
+      const hasStructuralChange = action.payload.some(
+        (c) => c.type === 'remove' || c.type === 'add' || c.type === 'replace',
+      );
+      if (hasStructuralChange) {
+        state.isDirty = true;
+      }
     },
 
     /** Handle a new connection between two nodes. */
@@ -187,6 +199,10 @@ const workflowSlice = createSlice({
       state.viewport = w.viewport;
       state.isDirty = false;
       state.lastSavedAt = w.updatedAt;
+      // M14: Reset sync state when loading a different workflow
+      state.isSyncing = false;
+      state.lastSyncedAt = undefined;
+      state.syncError = undefined;
     },
 
     /** Reset to a blank new workflow. */
@@ -236,6 +252,10 @@ const workflowSlice = createSlice({
       state.viewport = w.viewport;
       state.isDirty = false;
       state.lastSavedAt = w.updatedAt;
+      // M14: Reset sync state when importing a workflow
+      state.isSyncing = false;
+      state.lastSyncedAt = undefined;
+      state.syncError = undefined;
     });
 
     // Track saveWorkflow mutation lifecycle for sync state

@@ -1,6 +1,7 @@
-import { useCallback, useMemo, type ChangeEvent } from 'react';
+import { useCallback, useMemo, useState, type ChangeEvent } from 'react';
 import clsx from 'clsx';
 import { useNodeConfigPanel } from '@/hooks/useNodeConfigPanel';
+import { useAppSelector } from '@/app/hooks';
 import MethodSelector from '@/components/shared/MethodSelector';
 import KeyValueEditor from '@/components/shared/KeyValueEditor';
 import type { WebhookTriggerConfig, HttpMethod } from '@/types';
@@ -21,13 +22,21 @@ function entriesToRecord(entries: Array<{ key: string; value: string }>): Record
 
 export default function WebhookTriggerConfigPanel() {
   const { selectedNode, updateConfig } = useNodeConfigPanel();
+  const workflowId = useAppSelector((state) => state.workflow.id);
+  const lastSavedAt = useAppSelector((state) => state.workflow.lastSavedAt);
 
   const config = selectedNode?.data.config as WebhookTriggerConfig | undefined;
+  const [copied, setCopied] = useState(false);
 
   const headerEntries = useMemo(
     () => (config ? recordToEntries(config.headers) : []),
     [config],
   );
+
+  const webhookUrl = useMemo(() => {
+    if (typeof window === 'undefined') return '';
+    return `${window.location.origin}/api/webhooks/${workflowId}`;
+  }, [workflowId]);
 
   const handleMethodChange = useCallback(
     (method: HttpMethod) => updateConfig('method', method),
@@ -47,6 +56,13 @@ export default function WebhookTriggerConfigPanel() {
     },
     [updateConfig],
   );
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(webhookUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [webhookUrl]);
 
   if (!selectedNode || !config) return null;
 
@@ -111,6 +127,40 @@ export default function WebhookTriggerConfigPanel() {
         <span className="text-[var(--color-success)] font-bold">{config.method}</span>{' '}
         <span className="text-[var(--color-text)]">{config.path || '/webhook'}</span>
       </div>
+
+      {/* Webhook URL */}
+      {lastSavedAt && (
+        <div className="space-y-2">
+          <label className="block text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+            Webhook URL
+          </label>
+          <div
+            className={clsx(
+              'flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-mono',
+              'bg-[var(--color-surface-elevated)] border border-[var(--color-border)]',
+            )}
+          >
+            <span className="flex-1 truncate text-[var(--color-text)]">{webhookUrl}</span>
+            <button
+              type="button"
+              onClick={handleCopy}
+              title="Copy webhook URL"
+              className={clsx(
+                'flex-shrink-0 px-2 py-1 rounded text-[10px] font-medium',
+                'transition-all-fast',
+                copied
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-[var(--color-surface)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]',
+              )}
+            >
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+            Send HTTP requests to this URL to trigger the workflow on the server.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

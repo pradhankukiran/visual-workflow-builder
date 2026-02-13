@@ -157,6 +157,9 @@ function runInWorker(
 /**
  * Fallback: run user code on the main thread with a Promise.race timeout.
  * Used when Web Workers are unavailable.
+ *
+ * H11: Timer and abort listener are properly cleaned up in both resolve
+ * and reject paths of Promise.race.
  */
 function runOnMainThread(
   code: string,
@@ -190,22 +193,31 @@ function runOnMainThread(
 ${code}`,
   );
 
+  // H11: Capture timeoutId and onAbort in outer scope for proper cleanup
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
   let settled = false;
+
+  const cleanup = () => {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  };
 
   return Promise.race([
     Promise.resolve().then(() => fn(input, variables, customConsole)),
     new Promise<never>((_, reject) => {
-      const timeoutId = setTimeout(() => {
+      timeoutId = setTimeout(() => {
         if (!settled) {
           settled = true;
+          cleanup();
           reject(new Error(`Code execution timed out after ${timeoutMs}ms`));
         }
       }, timeoutMs);
 
-      const onAbort = () => {
+      onAbort = () => {
         if (!settled) {
           settled = true;
-          clearTimeout(timeoutId);
+          cleanup();
           reject(new Error('Code execution cancelled: workflow was aborted'));
         }
       };
@@ -213,26 +225,22 @@ ${code}`,
       // Check if already aborted
       if (signal.aborted) {
         settled = true;
-        clearTimeout(timeoutId);
+        cleanup();
         reject(new Error('Code execution cancelled: workflow was aborted'));
         return;
       }
 
       signal.addEventListener('abort', onAbort, { once: true });
-
-      // Cleanup helper: the winning promise branch of Promise.race will resolve/reject,
-      // but we need to clean up the losing branch. We do this by attaching a .then on
-      // the race result from the caller side. However, since we cannot do that from
-      // inside, we rely on the settled flag + the fact that the timer/listener are
-      // harmless once settled.
     }),
   ]).then(
     (result) => {
       settled = true;
+      cleanup();
       return result;
     },
     (err) => {
       settled = true;
+      cleanup();
       throw err;
     },
   );

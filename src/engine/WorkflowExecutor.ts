@@ -22,13 +22,11 @@ import { now } from '../utils/dateUtils';
  * This class is pure TypeScript — no Redux, no React.
  */
 export class WorkflowExecutor {
-  private context: ExecutionContext;
-  private abortController: AbortController;
+  private context!: ExecutionContext;
+  private abortController!: AbortController;
   private callbacks: ExecutionCallbacks;
 
   constructor(callbacks: Partial<ExecutionCallbacks>) {
-    this.abortController = new AbortController();
-    this.context = new ExecutionContext(this.abortController);
     this.callbacks = {
       onNodeStart: callbacks.onNodeStart ?? (() => {}),
       onNodeComplete: callbacks.onNodeComplete ?? (() => {}),
@@ -40,11 +38,18 @@ export class WorkflowExecutor {
   /**
    * Execute a workflow from start to finish.
    *
+   * H12: AbortController and ExecutionContext are created fresh per execution
+   * so the executor can safely be reused.
+   *
    * 1. Topological sort the nodes.
    * 2. Execute each node in order, respecting conditional branches.
    * 3. Return a complete ExecutionRun with all results.
    */
   async execute(workflow: Workflow): Promise<ExecutionRun> {
+    // H12: Create fresh abort controller and context per execution
+    this.abortController = new AbortController();
+    this.context = new ExecutionContext(this.abortController);
+
     const runId = generateExecutionId();
     const startedAt = now();
 
@@ -57,6 +62,22 @@ export class WorkflowExecutor {
       logs: [],
     };
 
+    // M17: Wrap onLog to also push to run.logs[] (matching server pattern)
+    const originalOnLog = this.callbacks.onLog;
+    this.callbacks.onLog = (log) => {
+      run.logs.push(log);
+      originalOnLog(log);
+    };
+
+    try {
+      return await this._executeInner(workflow, run);
+    } finally {
+      // Restore original onLog
+      this.callbacks.onLog = originalOnLog;
+    }
+  }
+
+  private async _executeInner(workflow: Workflow, run: ExecutionRun): Promise<ExecutionRun> {
     // Build node lookup for fast access
     const nodeMap = new Map<string, WorkflowNode>();
     for (const node of workflow.nodes) {

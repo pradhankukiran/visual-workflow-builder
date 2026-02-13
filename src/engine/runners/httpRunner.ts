@@ -10,11 +10,66 @@ export interface HttpRunnerResult {
 }
 
 /**
+ * Check if a URL points to a different origin than the current page.
+ */
+function isCrossOrigin(url: string): boolean {
+  try {
+    return new URL(url, window.location.origin).origin !== window.location.origin;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Route a cross-origin request through the server-side proxy to bypass CORS.
+ */
+async function fetchViaProxy(
+  url: string,
+  method: string,
+  headers: Record<string, string>,
+  body: string | undefined,
+  timeout: number,
+  signal: AbortSignal,
+): Promise<HttpRunnerResult> {
+  const startTime = performance.now();
+
+  const proxyResponse = await fetch('/api/proxy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Client-Source': 'visual-workflow-builder' },
+    body: JSON.stringify({ url, method, headers, body, timeout }),
+    signal,
+  });
+
+  const duration = performance.now() - startTime;
+
+  if (!proxyResponse.ok) {
+    const errorData = await proxyResponse.json().catch(() => null) as { error?: { message?: string } } | null;
+    throw new Error(
+      errorData?.error?.message ?? `Proxy request failed with status ${proxyResponse.status}`,
+    );
+  }
+
+  const result = await proxyResponse.json() as {
+    data: { status: number; statusText: string; headers: Record<string, string>; body: unknown };
+  };
+
+  return {
+    status: result.data.status,
+    statusText: result.data.statusText,
+    headers: result.data.headers,
+    body: result.data.body,
+    duration: Math.round(duration),
+  };
+}
+
+/**
  * Execute an HTTP Request node.
  *
  * Makes a real `fetch()` request with the configured method, headers, and body.
  * Expression templates in the URL, body, and header values are resolved from the
  * execution context before the request is sent.
+ *
+ * Cross-origin requests are routed through `/api/proxy` to bypass CORS.
  */
 export async function runHttpRequest(
   config: HttpRequestConfig,
@@ -31,11 +86,52 @@ export async function runHttpRequest(
     resolvedHeaders[key] = String(context.resolveExpression(value));
   }
 
+  const timeoutMs = config.timeout > 0 ? config.timeout : 30_000;
+
+  // Route cross-origin requests through server-side proxy
+  if (isCrossOrigin(resolvedUrl)) {
+    // Build a combined abort controller for timeout + context abort
+    const combinedController = new AbortController();
+    const timeoutId = setTimeout(() => combinedController.abort(new Error('Request timed out')), timeoutMs);
+    const onContextAbort = () => combinedController.abort(context.signal.reason);
+    if (context.signal.aborted) {
+      clearTimeout(timeoutId);
+      combinedController.abort(context.signal.reason);
+    } else {
+      context.signal.addEventListener('abort', onContextAbort, { once: true });
+    }
+
+    try {
+      return await fetchViaProxy(
+        resolvedUrl,
+        config.method,
+        resolvedHeaders,
+        config.method !== 'GET' ? resolvedBody : undefined,
+        timeoutMs,
+        combinedController.signal,
+      );
+    } catch (error: unknown) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        if (context.isAborted()) {
+          throw new Error('HTTP request cancelled: workflow execution was aborted');
+        }
+        throw new Error(
+          `HTTP request timed out after ${timeoutMs}ms for ${config.method} ${resolvedUrl}`,
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutId);
+      context.signal.removeEventListener('abort', onContextAbort);
+    }
+  }
+
+  // Same-origin: direct fetch (original behavior)
+
   // Build the abort signal: combine context signal with timeout using a manual
   // AbortController so we don't rely on AbortSignal.any() / AbortSignal.timeout()
   // which aren't available in all browsers.
   const combinedController = new AbortController();
-  const timeoutMs = config.timeout > 0 ? config.timeout : 30_000;
   const timeoutId = setTimeout(() => combinedController.abort(new Error('Request timed out')), timeoutMs);
   const onContextAbort = () => combinedController.abort(context.signal.reason);
   if (context.signal.aborted) {

@@ -49,12 +49,16 @@ export const selectCurrentRunLogs = createSelector(
   (run): ExecutionLog[] => run?.logs ?? [],
 );
 
-/** Select the execution status of a specific node within the current run. */
-export const selectNodeExecutionStatus = createSelector(
-  [selectCurrentRun, (_state: RootState, nodeId: string) => nodeId],
-  (run, nodeId): NodeExecutionResult | undefined =>
-    run?.nodeStatuses[nodeId],
-);
+/**
+ * M13: Select the execution status of a specific node within the current run.
+ * Plain O(1) function instead of createSelector to avoid cache thrashing
+ * when called with different nodeId arguments across many node components.
+ */
+export function selectNodeExecutionStatus(state: RootState, nodeId: string): NodeExecutionResult | undefined {
+  const { currentRunId, entities } = state.execution;
+  if (!currentRunId) return undefined;
+  return entities[currentRunId]?.nodeStatuses[nodeId];
+}
 
 /** Whether any execution is currently in progress. */
 export const selectIsExecuting = createSelector(

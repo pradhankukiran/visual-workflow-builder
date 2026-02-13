@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { redis, WORKFLOW_INDEX_KEY, workflowMetaKey, workflowDataKey } from '../_lib/redis.js';
+import { redis, WORKFLOW_INDEX_KEY, workflowMetaKey, workflowDataKey, execIndexKey, execRunKey } from '../_lib/redis.js';
+import { isValidId } from '../_lib/validation.js';
 import type { Workflow, WorkflowMetadata } from '../_lib/types.js';
 
 /**
@@ -12,6 +13,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (typeof id !== 'string') {
     return res.status(400).json({ error: { message: 'Invalid workflow ID', code: 'VALIDATION_ERROR' } });
+  }
+
+  // H6/M4: Validate ID format before using in Redis keys
+  if (!isValidId(id)) {
+    return res.status(400).json({ error: { message: 'Invalid workflow ID format', code: 'VALIDATION_ERROR' } });
   }
 
   try {
@@ -27,7 +33,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(405).json({ error: { message: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' } });
     }
   } catch (err) {
-    console.error(`[api/workflows/${id}] Unhandled error:`, err);
+    // L2: Don't include workflow ID in error messages
+    console.error('[api/workflows] Unhandled error:', err);
     return res.status(500).json({ error: { message: 'Internal server error', code: 'INTERNAL_ERROR' } });
   }
 }
@@ -36,7 +43,8 @@ async function handleGet(id: string, res: VercelResponse) {
   const raw = await redis.get<string>(workflowDataKey(id));
 
   if (raw === null) {
-    return res.status(404).json({ error: { message: `Workflow "${id}" not found`, code: 'NOT_FOUND' } });
+    // L2: Don't include ID in error response
+    return res.status(404).json({ error: { message: 'Workflow not found', code: 'NOT_FOUND' } });
   }
 
   const workflow: Workflow = typeof raw === 'string' ? JSON.parse(raw) : raw;
@@ -56,6 +64,8 @@ async function handlePut(id: string, req: VercelRequest, res: VercelResponse) {
     ? (typeof existingRaw === 'string' ? JSON.parse(existingRaw) : existingRaw)
     : null;
 
+  const now = new Date().toISOString();
+
   const workflow: Workflow = {
     id,
     name: body.name,
@@ -63,8 +73,8 @@ async function handlePut(id: string, req: VercelRequest, res: VercelResponse) {
     nodes: body.nodes ?? [],
     edges: body.edges ?? [],
     viewport: body.viewport ?? { x: 0, y: 0, zoom: 1 },
-    createdAt: existing?.createdAt ?? body.createdAt ?? new Date().toISOString(),
-    updatedAt: body.updatedAt ?? new Date().toISOString(),
+    createdAt: existing?.createdAt ?? body.createdAt ?? now,
+    updatedAt: now, // Always set server-side
     tags: body.tags ?? [],
     isTemplate: body.isTemplate ?? false,
   };
@@ -93,11 +103,26 @@ async function handlePut(id: string, req: VercelRequest, res: VercelResponse) {
 }
 
 async function handleDelete(id: string, res: VercelResponse) {
-  // Pipeline: delete data + meta + remove from index
+  // M5: Check existence before deleting
+  const exists = await redis.exists(workflowDataKey(id));
+  if (!exists) {
+    return res.status(404).json({ error: { message: 'Workflow not found', code: 'NOT_FOUND' } });
+  }
+
+  // L3: Clean up associated execution data
+  const execRunIds = await redis.zrange<string[]>(execIndexKey(id), 0, -1);
+
   const pipeline = redis.pipeline();
   pipeline.del(workflowDataKey(id));
   pipeline.del(workflowMetaKey(id));
   pipeline.zrem(WORKFLOW_INDEX_KEY, id);
+
+  // Delete all execution runs and the exec index
+  for (const runId of execRunIds) {
+    pipeline.del(execRunKey(runId));
+  }
+  pipeline.del(execIndexKey(id));
+
   await pipeline.exec();
 
   return res.status(200).json({ data: { id } });

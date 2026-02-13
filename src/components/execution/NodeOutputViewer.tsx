@@ -92,11 +92,12 @@ export default function NodeOutputViewer({ nodeId }: NodeOutputViewerProps) {
 
   const handleCopyOutput = useCallback(() => {
     if (outputStr) {
+      // L9: Catch clipboard errors (e.g. permissions denied, insecure context)
       navigator.clipboard.writeText(outputStr).then(() => {
         setCopyFeedback(true);
         if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
         copyTimeoutRef.current = setTimeout(() => setCopyFeedback(false), 1500);
-      });
+      }).catch(() => {});
     }
   }, [outputStr]);
 

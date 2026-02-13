@@ -12,6 +12,8 @@ export function now(): string {
 export function formatDate(isoString: string): string {
   try {
     const date = new Date(isoString);
+    // L8: Guard against invalid dates
+    if (isNaN(date.getTime())) return 'Unknown date';
     return date.toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',
@@ -66,6 +68,8 @@ export function formatDuration(ms: number): string {
 export function timeAgo(isoString: string): string {
   try {
     const date = new Date(isoString);
+    // L8: Guard against invalid dates
+    if (isNaN(date.getTime())) return 'Unknown date';
     const nowMs = Date.now();
     const diffMs = nowMs - date.getTime();
 
