@@ -1,0 +1,88 @@
+import { useCallback, type ChangeEvent } from 'react';
+import clsx from 'clsx';
+import { useNodeConfigPanel } from '@/hooks/useNodeConfigPanel';
+import ExpressionInput from '@/components/shared/ExpressionInput';
+import type { VariableGetConfig } from '@/types';
+
+export default function VariableGetConfigPanel() {
+  const { selectedNode, updateConfig } = useNodeConfigPanel();
+
+  const config = selectedNode?.data.config as VariableGetConfig | undefined;
+
+  const handleVariableNameChange = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      updateConfig('variableName', e.target.value);
+    },
+    [updateConfig],
+  );
+
+  const handleDefaultValueChange = useCallback(
+    (value: string) => {
+      updateConfig('defaultValue', value || undefined);
+    },
+    [updateConfig],
+  );
+
+  if (!selectedNode || !config) return null;
+
+  return (
+    <div className="space-y-4">
+      {/* Variable Name */}
+      <div className="space-y-2">
+        <label className="block text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+          Variable Name
+        </label>
+        <input
+          type="text"
+          value={config.variableName}
+          onChange={handleVariableNameChange}
+          placeholder="myVariable"
+          className={clsx(
+            'w-full px-3 py-2 rounded-md text-xs font-mono',
+            'bg-[var(--color-surface-elevated)] border border-[var(--color-border)]',
+            'text-[var(--color-text)] placeholder:text-[var(--color-text-muted)]',
+            'outline-none focus:border-[var(--color-accent)]',
+            'transition-all-fast',
+          )}
+          aria-label="Variable name"
+        />
+        <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+          The name of the workflow variable to retrieve.
+        </p>
+      </div>
+
+      {/* Default Value */}
+      <div className="space-y-2">
+        <ExpressionInput
+          value={config.defaultValue ?? ''}
+          onChange={handleDefaultValueChange}
+          placeholder="fallback value"
+          label="Default Value (optional)"
+        />
+        <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+          A fallback value to use if the variable has not been set. Leave empty to return undefined.
+        </p>
+      </div>
+
+      {/* Preview */}
+      {config.variableName && (
+        <div
+          className={clsx(
+            'px-3 py-2.5 rounded-lg text-xs font-mono',
+            'bg-[var(--color-surface-elevated)] border border-[var(--color-border)]',
+          )}
+        >
+          <span className="text-[var(--color-text-muted)]">read </span>
+          <span className="text-[var(--color-accent)]">$vars.</span>
+          <span className="text-[var(--color-text)]">{config.variableName}</span>
+          {config.defaultValue && (
+            <>
+              <span className="text-[var(--color-text-muted)]"> ?? </span>
+              <span className="text-[var(--color-success)]">{config.defaultValue}</span>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

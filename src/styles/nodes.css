@@ -1,0 +1,274 @@
+/* ========================================
+   Workflow Node Base Styles
+   ======================================== */
+
+.workflow-node {
+  background-color: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  min-width: 200px;
+  max-width: 280px;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.08),
+    0 1px 2px rgba(0, 0, 0, 0.04);
+  transition:
+    box-shadow 0.2s ease,
+    opacity 0.2s ease;
+  overflow: hidden;
+  cursor: grab;
+  position: relative;
+}
+
+.workflow-node:active {
+  cursor: grabbing;
+}
+
+.workflow-node:hover {
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.1),
+    0 2px 4px rgba(0, 0, 0, 0.06);
+}
+
+/* ========================================
+   Node Header (top color stripe)
+   ======================================== */
+
+.workflow-node__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.workflow-node__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.workflow-node__label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-node__status {
+  flex-shrink: 0;
+}
+
+/* ========================================
+   Node Body
+   ======================================== */
+
+.workflow-node__body {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.workflow-node__description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* ========================================
+   Category Color Accents (top border)
+   ======================================== */
+
+.workflow-node--trigger {
+  --node-category-color: var(--color-node-trigger);
+  border-top: 3px solid var(--node-category-color);
+}
+
+.workflow-node--trigger .workflow-node__icon {
+  background-color: color-mix(in srgb, var(--color-node-trigger) 15%, transparent);
+  color: var(--color-node-trigger);
+}
+
+.workflow-node--action {
+  --node-category-color: var(--color-node-action);
+  border-top: 3px solid var(--node-category-color);
+}
+
+.workflow-node--action .workflow-node__icon {
+  background-color: color-mix(in srgb, var(--color-node-action) 15%, transparent);
+  color: var(--color-node-action);
+}
+
+.workflow-node--logic {
+  --node-category-color: var(--color-node-logic);
+  border-top: 3px solid var(--node-category-color);
+}
+
+.workflow-node--logic .workflow-node__icon {
+  background-color: color-mix(in srgb, var(--color-node-logic) 15%, transparent);
+  color: var(--color-node-logic);
+}
+
+.workflow-node--output {
+  --node-category-color: var(--color-node-output);
+  border-top: 3px solid var(--node-category-color);
+}
+
+.workflow-node--output .workflow-node__icon {
+  background-color: color-mix(in srgb, var(--color-node-output) 15%, transparent);
+  color: var(--color-node-output);
+}
+
+.workflow-node--data {
+  --node-category-color: var(--color-node-data);
+  border-top: 3px solid var(--node-category-color);
+}
+
+.workflow-node--data .workflow-node__icon {
+  background-color: color-mix(in srgb, var(--color-node-data) 15%, transparent);
+  color: var(--color-node-data);
+}
+
+/* ========================================
+   Node States
+   ======================================== */
+
+/* Selected */
+.workflow-node--selected {
+  border: 3px solid var(--node-category-color, var(--color-accent));
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* Running */
+.workflow-node--running {
+  animation: pulse-border 1.5s ease-in-out infinite;
+}
+
+.workflow-node--running::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 10px;
+  border: 2px solid var(--color-accent);
+  animation: pulse-border 1.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* Success */
+.workflow-node--success {
+  animation: flash-success 0.6s ease-out;
+}
+
+@keyframes flash-success {
+  0% {
+    box-shadow:
+      0 0 0 0 var(--color-success),
+      0 1px 3px rgba(0, 0, 0, 0.08);
+  }
+  50% {
+    box-shadow:
+      0 0 0 4px color-mix(in srgb, var(--color-success) 40%, transparent),
+      0 4px 12px rgba(0, 0, 0, 0.1);
+  }
+  100% {
+    box-shadow:
+      0 0 0 0 transparent,
+      0 1px 3px rgba(0, 0, 0, 0.08);
+  }
+}
+
+/* Error */
+.workflow-node--error {
+  border-color: var(--color-error);
+  animation: flash-error 0.6s ease-out;
+}
+
+@keyframes flash-error {
+  0% {
+    box-shadow:
+      0 0 0 0 var(--color-error),
+      0 1px 3px rgba(0, 0, 0, 0.08);
+  }
+  50% {
+    box-shadow:
+      0 0 0 4px color-mix(in srgb, var(--color-error) 40%, transparent),
+      0 4px 12px rgba(0, 0, 0, 0.1);
+  }
+  100% {
+    box-shadow:
+      0 0 0 0 transparent,
+      0 1px 3px rgba(0, 0, 0, 0.08);
+    border-color: var(--color-error);
+  }
+}
+
+/* Skipped */
+.workflow-node--skipped {
+  opacity: 0.5;
+}
+
+.workflow-node--skipped .workflow-node__header,
+.workflow-node--skipped .workflow-node__body {
+  opacity: 0.6;
+}
+
+/* Disabled */
+.workflow-node--disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* ========================================
+   Handle Styling
+   ======================================== */
+
+.workflow-node .react-flow__handle {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--color-border);
+  background-color: var(--color-surface-elevated);
+  border-radius: 50%;
+  opacity: 0;
+  transition:
+    opacity 0.15s ease,
+    border-color 0.15s ease,
+    background-color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.workflow-node:hover .react-flow__handle,
+.workflow-node--selected .react-flow__handle {
+  opacity: 1;
+}
+
+.workflow-node .react-flow__handle:hover {
+  border-color: var(--color-accent);
+  background-color: var(--color-accent);
+  transform: scale(1.3);
+}
+
+.workflow-node .react-flow__handle-top {
+  top: -5px;
+}
+
+.workflow-node .react-flow__handle-bottom {
+  bottom: -5px;
+}
+
+.workflow-node .react-flow__handle-left {
+  left: -5px;
+}
+
+.workflow-node .react-flow__handle-right {
+  right: -5px;
+}

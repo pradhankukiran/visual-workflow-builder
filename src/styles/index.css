@@ -1,0 +1,147 @@
+@import "tailwindcss";
+
+/* ========================================
+   Theme Custom Properties
+   ======================================== */
+
+:root {
+  --color-bg: #ffffff;
+  --color-surface: #f8fafc;
+  --color-surface-elevated: #ffffff;
+  --color-border: #e2e8f0;
+  --color-text: #0f172a;
+  --color-text-muted: #64748b;
+  --color-accent: #6366f1;
+  --color-accent-hover: #4f46e5;
+  --color-success: #10b981;
+  --color-error: #ef4444;
+  --color-warning: #f59e0b;
+  --color-info: #3b82f6;
+  --color-node-trigger: #8b5cf6;
+  --color-node-action: #3b82f6;
+  --color-node-logic: #f59e0b;
+  --color-node-output: #10b981;
+  --color-node-data: #ec4899;
+}
+
+.dark {
+  --color-bg: #0f172a;
+  --color-surface: #1e293b;
+  --color-surface-elevated: #334155;
+  --color-border: #334155;
+  --color-text: #f1f5f9;
+  --color-text-muted: #94a3b8;
+  --color-accent: #818cf8;
+  --color-accent-hover: #6366f1;
+  --color-success: #34d399;
+  --color-error: #f87171;
+  --color-warning: #fbbf24;
+  --color-info: #60a5fa;
+  --color-node-trigger: #a78bfa;
+  --color-node-action: #60a5fa;
+  --color-node-logic: #fbbf24;
+  --color-node-output: #34d399;
+  --color-node-data: #f472b6;
+}
+
+/* ========================================
+   Base Styles
+   ======================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ========================================
+   Scrollbar Styling
+   ======================================== */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--color-border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-text-muted);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background-color: var(--color-surface-elevated);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-text-muted);
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+
+/* ========================================
+   Selection Highlight
+   ======================================== */
+
+::selection {
+  background-color: var(--color-accent);
+  color: #ffffff;
+}
+
+::-moz-selection {
+  background-color: var(--color-accent);
+  color: #ffffff;
+}
+
+/* ========================================
+   Focus Styles
+   ======================================== */
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ========================================
+   Utility: Truncate
+   ======================================== */
+
+.truncate-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
