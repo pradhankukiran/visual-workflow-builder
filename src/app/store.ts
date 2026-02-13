@@ -1,4 +1,5 @@
 import { configureStore } from '@reduxjs/toolkit';
+import { setupListeners } from '@reduxjs/toolkit/query';
 import {
   persistStore,
   persistReducer,
@@ -35,6 +36,10 @@ export const store = configureStore({
       .concat(workflowLibraryApi.middleware),
   devTools: true,
 });
+
+// ─── Listeners ──────────────────────────────────────────────────────────────
+// Wire RTK Query's refetchOnFocus / refetchOnReconnect to browser events
+setupListeners(store.dispatch);
 
 // ─── Persistor ───────────────────────────────────────────────────────────────
 

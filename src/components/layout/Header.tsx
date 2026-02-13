@@ -1,8 +1,11 @@
-import { useState, useRef, useCallback, useEffect, type KeyboardEvent } from 'react';
+import { useState, useRef, useCallback, useEffect, type KeyboardEvent, type ChangeEvent } from 'react';
 import clsx from 'clsx';
 import { useAppSelector, useAppDispatch } from '@/app/hooks';
 import { setWorkflowMeta } from '@/features/workflow/workflowSlice';
+import { importWorkflow } from '@/features/workflow/workflowActions';
+import { selectSyncStatus } from '@/features/workflow/workflowSelectors';
 import { addToast } from '@/features/toast/toastSlice';
+import { useLazyExportWorkflowQuery, useImportWorkflowFileMutation } from '@/features/workflowLibrary/workflowFileApi';
 import { useUndoRedo } from '@/hooks/useUndoRedo';
 import { useAutoSave } from '@/hooks/useAutoSave';
 import ThemeToggle from '@/components/shared/ThemeToggle';
@@ -11,15 +14,20 @@ import ExecutionControls from '@/components/execution/ExecutionControls';
 export default function Header() {
   const dispatch = useAppDispatch();
   const workflowName = useAppSelector((state) => state.workflow.name);
-  const isDirty = useAppSelector((state) => state.workflow.isDirty);
+  const workflowId = useAppSelector((state) => state.workflow.id);
+  const { isSyncing, syncError, isDirty } = useAppSelector(selectSyncStatus);
   const { canUndo, canRedo, handleUndo, handleRedo } = useUndoRedo();
   const { saveNow, isSaving } = useAutoSave();
+
+  const [importFile] = useImportWorkflowFileMutation();
+  const [exportTrigger] = useLazyExportWorkflowQuery();
 
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState(workflowName);
   const [menuOpen, setMenuOpen] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setEditedName(workflowName);
@@ -70,6 +78,35 @@ export default function Header() {
     saveNow();
   }, [saveNow]);
 
+  const handleImport = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const workflow = await importFile(file).unwrap();
+      dispatch(importWorkflow(workflow));
+      dispatch(addToast({ type: 'success', message: `Imported "${workflow.name}"` }));
+    } catch (err) {
+      dispatch(addToast({ type: 'error', message: `Import failed: ${(err as { error: string }).error}` }));
+    }
+    e.target.value = ''; // Reset for re-import of same file
+  }, [dispatch, importFile]);
+
+  const handleExport = useCallback(async () => {
+    try {
+      const json = await exportTrigger(workflowId).unwrap();
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${workflowName.replace(/\s+/g, '-').toLowerCase()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      dispatch(addToast({ type: 'success', message: 'Workflow exported' }));
+    } catch {
+      dispatch(addToast({ type: 'error', message: 'Export failed' }));
+    }
+  }, [exportTrigger, workflowId, workflowName, dispatch]);
+
   const handleMenuAction = useCallback(
     (action: 'new' | 'import' | 'export') => {
       setMenuOpen(false);
@@ -78,14 +115,14 @@ export default function Header() {
           dispatch(addToast({ type: 'info', message: 'New workflow created' }));
           break;
         case 'import':
-          dispatch(addToast({ type: 'info', message: 'Import workflow (coming soon)' }));
+          fileInputRef.current?.click();
           break;
         case 'export':
-          dispatch(addToast({ type: 'info', message: 'Export workflow (coming soon)' }));
+          handleExport();
           break;
       }
     },
-    [dispatch],
+    [dispatch, handleExport],
   );
 
   return (
@@ -97,6 +134,9 @@ export default function Header() {
         'transition-theme',
       )}
     >
+      {/* Hidden file input for JSON import */}
+      <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={handleImport} />
+
       {/* Left: Workflow name */}
       <div className="flex items-center gap-2 min-w-0 flex-shrink-0">
         {isEditingName ? (
@@ -131,14 +171,33 @@ export default function Header() {
           </button>
         )}
 
-        {/* Dirty indicator */}
+        {/* Sync indicator */}
         <span
           className={clsx(
             'w-2 h-2 rounded-full shrink-0 transition-all-fast',
-            isDirty ? 'bg-[var(--color-warning)]' : 'bg-[var(--color-success)]',
+            isSyncing && 'bg-[var(--color-accent)] animate-pulse',
+            !isSyncing && syncError && 'bg-[var(--color-error)]',
+            !isSyncing && !syncError && isDirty && 'bg-[var(--color-warning)]',
+            !isSyncing && !syncError && !isDirty && 'bg-[var(--color-success)]',
           )}
-          title={isDirty ? 'Unsaved changes' : 'All changes saved'}
-          aria-label={isDirty ? 'Unsaved changes' : 'All changes saved'}
+          title={
+            isSyncing
+              ? 'Syncing...'
+              : syncError
+                ? `Sync failed: ${syncError}`
+                : isDirty
+                  ? 'Unsaved changes'
+                  : 'All changes saved'
+          }
+          aria-label={
+            isSyncing
+              ? 'Syncing'
+              : syncError
+                ? 'Sync failed'
+                : isDirty
+                  ? 'Unsaved changes'
+                  : 'All changes saved'
+          }
         />
       </div>
 

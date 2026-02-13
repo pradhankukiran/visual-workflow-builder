@@ -9,6 +9,7 @@ import {
   type NodeDefinition,
 } from '@/constants/nodeDefinitions';
 import type { NodeType } from '@/types';
+import { useGetWorkflowsQuery } from '@/features/workflowLibrary/workflowLibraryApi';
 import TemplateLibrary from '@/components/library/TemplateLibrary';
 import WorkflowLibrary from '@/components/library/WorkflowLibrary';
 
@@ -25,6 +26,32 @@ const CATEGORY_META: Record<NodeCategory, { label: string; color: string }> = {
 };
 
 const CATEGORY_ORDER: NodeCategory[] = ['trigger', 'action', 'logic', 'output', 'data'];
+
+// ========================================
+// WorkflowCountBadge — uses selectFromResult
+// to only re-render when count changes
+// ========================================
+
+function WorkflowCountBadge() {
+  const { count } = useGetWorkflowsQuery(undefined, {
+    selectFromResult: ({ data }) => ({
+      count: data?.length ?? 0,
+    }),
+  });
+
+  if (count === 0) return null;
+
+  return (
+    <span
+      className={clsx(
+        'ml-1 px-1.5 py-0.5 rounded-full text-[9px] font-medium',
+        'bg-[var(--color-accent)] text-white min-w-[1.25rem] text-center',
+      )}
+    >
+      {count}
+    </span>
+  );
+}
 
 type SidebarTab = 'nodes' | 'library' | 'templates';
 
@@ -114,6 +141,7 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
             >
               <tab.icon size={14} />
               {!collapsed && <span className="truncate">{tab.label}</span>}
+              {!collapsed && tab.id === 'library' && <WorkflowCountBadge />}
             </button>
           ))}
         </div>
@@ -157,9 +185,9 @@ export default function Sidebar({ collapsed, onToggle }: SidebarProps) {
               onDragStart={handleDragStart}
             />
           )}
-          {activeTab === 'library' && (
-            <WorkflowLibrary />
-          )}
+          <div className={activeTab === 'library' ? 'contents' : 'hidden'}>
+            <WorkflowLibrary isActive={activeTab === 'library'} />
+          </div>
           {activeTab === 'templates' && (
             <TemplateLibrary />
           )}

@@ -5,6 +5,7 @@ import {
   sortWorkflowsByDate,
   filterWorkflows,
 } from '@/features/workflowLibrary/workflowLibraryTransforms';
+import { WORKFLOW_LIST_POLL_INTERVAL_MS } from '@/constants/defaults';
 import { useAppDispatch } from '@/app/hooks';
 import { newWorkflow } from '@/features/workflow/workflowSlice';
 import { addToast } from '@/features/toast/toastSlice';
@@ -12,12 +13,16 @@ import WorkflowCard from './WorkflowCard';
 import EmptyState from '@/components/shared/EmptyState';
 
 interface WorkflowLibraryProps {
+  isActive?: boolean;
   onClose?: () => void;
 }
 
-export default function WorkflowLibrary({ onClose }: WorkflowLibraryProps) {
+export default function WorkflowLibrary({ isActive = true, onClose }: WorkflowLibraryProps) {
   const dispatch = useAppDispatch();
-  const { data: workflows, isLoading, isError, refetch } = useGetWorkflowsQuery();
+  const { data: workflows, isLoading, isError, refetch } = useGetWorkflowsQuery(undefined, {
+    skip: !isActive,
+    pollingInterval: WORKFLOW_LIST_POLL_INTERVAL_MS,
+  });
   const [searchQuery, setSearchQuery] = useState('');
 
   const filteredWorkflows = useMemo(() => {

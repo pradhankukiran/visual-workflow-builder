@@ -58,6 +58,17 @@ export const selectWorkflowIsDirty = createSelector(
   (wf) => wf.isDirty,
 );
 
+/** Select sync status for the Header indicator. */
+export const selectSyncStatus = createSelector(
+  selectWorkflowState,
+  (wf) => ({
+    isSyncing: wf.isSyncing,
+    lastSyncedAt: wf.lastSyncedAt,
+    syncError: wf.syncError,
+    isDirty: wf.isDirty,
+  }),
+);
+
 /** Select all nodes of a specific type. */
 export const selectNodesByType = createSelector(
   [selectAllNodes, (_state: RootState, nodeType: NodeType) => nodeType],

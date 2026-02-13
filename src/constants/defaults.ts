@@ -65,6 +65,11 @@ export const MAX_HISTORY_SIZE = 50;
 export const AUTO_SAVE_DEBOUNCE_MS = 2000;
 
 /**
+ * Polling interval for the workflow list query in milliseconds.
+ */
+export const WORKFLOW_LIST_POLL_INTERVAL_MS = 30_000;
+
+/**
  * Default toast notification duration in milliseconds.
  */
 export const DEFAULT_TOAST_DURATION = 5000;

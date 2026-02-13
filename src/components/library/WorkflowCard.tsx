@@ -4,6 +4,7 @@ import { useAppDispatch } from '@/app/hooks';
 import {
   useDeleteWorkflowMutation,
   useSaveWorkflowMutation,
+  usePrefetch,
   workflowLibraryApi,
 } from '@/features/workflowLibrary/workflowLibraryApi';
 import { loadWorkflow } from '@/features/workflow/workflowSlice';
@@ -22,7 +23,12 @@ export default function WorkflowCard({ workflow, onLoad }: WorkflowCardProps) {
   const dispatch = useAppDispatch();
   const [deleteWorkflow] = useDeleteWorkflowMutation();
   const [saveWorkflowMutation] = useSaveWorkflowMutation();
+  const prefetchWorkflow = usePrefetch('getWorkflow');
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const handleMouseEnter = useCallback(() => {
+    prefetchWorkflow(workflow.id, { ifOlderThan: 60 });
+  }, [prefetchWorkflow, workflow.id]);
 
   const handleLoad = useCallback(async () => {
     try {
@@ -87,6 +93,8 @@ export default function WorkflowCard({ workflow, onLoad }: WorkflowCardProps) {
           'transition-all-fast cursor-pointer',
         )}
         onClick={handleLoad}
+        onMouseEnter={handleMouseEnter}
+        onFocus={handleMouseEnter}
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {

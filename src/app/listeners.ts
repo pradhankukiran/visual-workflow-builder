@@ -11,3 +11,4 @@
 import '../features/workflow/workflowListeners';
 import '../features/toast/toastListeners';
 import '../features/execution/executionListeners';
+import '../features/workflowLibrary/workflowSyncListeners';

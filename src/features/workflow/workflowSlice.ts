@@ -34,6 +34,9 @@ export interface WorkflowState {
   viewport: WorkflowViewport;
   isDirty: boolean;
   lastSavedAt?: string;
+  isSyncing: boolean;
+  lastSyncedAt?: string;
+  syncError?: string;
 }
 
 const initialState: WorkflowState = {
@@ -45,6 +48,9 @@ const initialState: WorkflowState = {
   viewport: { ...DEFAULT_VIEWPORT },
   isDirty: false,
   lastSavedAt: undefined,
+  isSyncing: false,
+  lastSyncedAt: undefined,
+  syncError: undefined,
 };
 
 // ─── Slice ───────────────────────────────────────────────────────────────────
@@ -193,6 +199,9 @@ const workflowSlice = createSlice({
       state.viewport = { ...DEFAULT_VIEWPORT };
       state.isDirty = false;
       state.lastSavedAt = undefined;
+      state.isSyncing = false;
+      state.lastSyncedAt = undefined;
+      state.syncError = undefined;
     },
 
     /** Mark the workflow as saved (clears isDirty). */
@@ -208,12 +217,13 @@ const workflowSlice = createSlice({
   },
   extraReducers: (builder) => {
     // Handle the cross-slice resetApp action
-    builder.addCase(resetApp, () => {
-      return {
-        ...initialState,
-        id: generateWorkflowId(),
-      };
-    });
+    builder.addCase(resetApp, () => ({
+      ...initialState,
+      id: generateWorkflowId(),
+      isSyncing: false,
+      lastSyncedAt: undefined,
+      syncError: undefined,
+    }));
 
     // Handle the cross-slice importWorkflow action
     builder.addCase(importWorkflow, (state, action) => {
@@ -228,19 +238,29 @@ const workflowSlice = createSlice({
       state.lastSavedAt = w.updatedAt;
     });
 
-    // When a workflow is loaded via RTK Query, populate the active canvas state
+    // Track saveWorkflow mutation lifecycle for sync state
     builder.addMatcher(
-      workflowLibraryApi.endpoints.getWorkflow.matchFulfilled,
+      workflowLibraryApi.endpoints.saveWorkflow.matchPending,
+      (state) => {
+        state.isSyncing = true;
+        state.syncError = undefined;
+      },
+    );
+    builder.addMatcher(
+      workflowLibraryApi.endpoints.saveWorkflow.matchFulfilled,
       (state, action) => {
-        const w = action.payload;
-        state.id = w.id;
-        state.name = w.name;
-        state.description = w.description;
-        state.nodes = w.nodes;
-        state.edges = w.edges;
-        state.viewport = w.viewport;
-        state.isDirty = false;
-        state.lastSavedAt = w.updatedAt;
+        state.isSyncing = false;
+        state.lastSyncedAt = action.payload.updatedAt;
+        state.syncError = undefined;
+      },
+    );
+    builder.addMatcher(
+      workflowLibraryApi.endpoints.saveWorkflow.matchRejected,
+      (state, action) => {
+        state.isSyncing = false;
+        // action.payload has the transformErrorResponse result (server message);
+        // action.error is the fallback for network errors (no server response)
+        state.syncError = (action.payload as string | undefined) ?? action.error?.message ?? 'Sync failed';
       },
     );
   },
