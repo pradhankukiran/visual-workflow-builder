@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { redis, WORKFLOW_INDEX_KEY, workflowMetaKey, workflowDataKey } from '../_lib/redis';
-import type { Workflow, WorkflowMetadata } from '../_lib/types';
+import { redis, WORKFLOW_INDEX_KEY, workflowMetaKey, workflowDataKey } from '../_lib/redis.js';
+import type { Workflow, WorkflowMetadata } from '../_lib/types.js';
 
 /**
  * GET    /api/workflows/:id  — Get a single workflow
