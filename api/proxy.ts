@@ -50,7 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', req.headers.origin ?? '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Client-Source');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Client-Source, Authorization');
     res.setHeader('Vary', 'Origin');
     return res.status(204).end();
   }
@@ -71,7 +71,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Origin validated — set CORS headers for the actual response
   res.setHeader('Access-Control-Allow-Origin', req.headers.origin ?? '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Client-Source');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Client-Source, Authorization');
   res.setHeader('Vary', 'Origin');
 
   try {

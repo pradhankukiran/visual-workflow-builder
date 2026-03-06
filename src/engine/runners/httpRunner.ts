@@ -54,9 +54,18 @@ async function fetchViaProxy(
 ): Promise<HttpRunnerResult> {
   const startTime = performance.now();
 
+  const proxyHeaders: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Client-Source': 'visual-workflow-builder',
+  };
+  const token = await window.Clerk?.session?.getToken();
+  if (token) {
+    proxyHeaders['Authorization'] = `Bearer ${token}`;
+  }
+
   const proxyResponse = await fetch('/api/proxy', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Client-Source': 'visual-workflow-builder' },
+    headers: proxyHeaders,
     body: JSON.stringify({ url, method, headers, body, timeout, followRedirects }),
     signal,
   });
