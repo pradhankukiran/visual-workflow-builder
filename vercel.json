@@ -2,6 +2,11 @@
   "rewrites": [
     { "source": "/api/webhooks/:workflowId", "destination": "/api/webhooks/[workflowId]" },
     { "source": "/api/executions/:id", "destination": "/api/executions/[id]" },
+    { "source": "/api/schedules/:workflowId", "destination": "/api/schedules/[workflowId]" },
+    { "source": "/api/credentials/:id", "destination": "/api/credentials/[id]" },
+    { "source": "/api/workflow-run/:workflowId", "destination": "/api/workflow-run/[workflowId]" },
+    { "source": "/api/workflows/:id/versions", "destination": "/api/workflows/[id]/versions" },
+    { "source": "/api/workflows/:id", "destination": "/api/workflows/[id]" },
     { "source": "/api/(.*)", "destination": "/api/$1" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]

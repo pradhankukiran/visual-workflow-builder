@@ -1,11 +1,13 @@
 import type { WebhookTriggerConfig } from '../../types';
 import type { ExecutionContext } from '../ExecutionContext';
+import { now } from '../../utils/dateUtils';
 
 export interface WebhookRunnerResult {
   method: string;
   path: string;
   headers: Record<string, string>;
   body: Record<string, unknown>;
+  query: Record<string, string>;
   timestamp: string;
   triggered: true;
 }
@@ -22,12 +24,24 @@ export async function runWebhookTrigger(
   config: WebhookTriggerConfig,
   _context: ExecutionContext,
 ): Promise<WebhookRunnerResult> {
+  const testData = config.testData;
+
+  let body: Record<string, unknown> = {};
+  if (testData?.body) {
+    try {
+      body = JSON.parse(testData.body);
+    } catch {
+      body = { raw: testData.body };
+    }
+  }
+
   return {
-    method: config.method,
+    method: testData?.method ?? config.method,
     path: config.path,
-    headers: { ...config.headers },
-    body: {},
-    timestamp: new Date().toISOString(),
+    headers: testData?.headers ?? { ...config.headers },
+    body,
+    query: testData?.queryParams ?? {},
+    timestamp: now(),
     triggered: true,
   };
 }

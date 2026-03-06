@@ -3,8 +3,10 @@ import type { ExecutionContext } from './ExecutionContext';
 
 /**
  * Regex to match expression templates: {{nodeId.output.path}} or {{$variables.name}}
+ * Non-global version for test() calls; create a new regex with /g inside functions
+ * that need global matching to avoid stateful lastIndex bugs.
  */
-const EXPRESSION_PATTERN = /\{\{([^}]+)\}\}/g;
+const EXPRESSION_PATTERN = /\{\{([^}]+)\}\}/;
 
 /**
  * Parsed reference from an expression template.
@@ -18,7 +20,6 @@ export interface ExpressionReference {
  * Check if a string value contains expression template patterns.
  */
 export function isExpression(value: string): boolean {
-  EXPRESSION_PATTERN.lastIndex = 0;
   return EXPRESSION_PATTERN.test(value);
 }
 
@@ -38,10 +39,10 @@ export function extractExpressionReferences(
   template: string,
 ): ExpressionReference[] {
   const references: ExpressionReference[] = [];
-  EXPRESSION_PATTERN.lastIndex = 0;
+  const globalPattern = /\{\{([^}]+)\}\}/g;
 
   let match: RegExpExecArray | null;
-  while ((match = EXPRESSION_PATTERN.exec(template)) !== null) {
+  while ((match = globalPattern.exec(template)) !== null) {
     const expression = match[1].trim();
     const dotIndex = expression.indexOf('.');
     if (dotIndex === -1) {
@@ -132,8 +133,8 @@ export function evaluateExpression(
   }
 
   // Mixed template: interpolate all expressions as strings
-  EXPRESSION_PATTERN.lastIndex = 0;
-  return template.replace(EXPRESSION_PATTERN, (_fullMatch, expression: string) => {
+  const globalPattern = /\{\{([^}]+)\}\}/g;
+  return template.replace(globalPattern, (_fullMatch, expression: string) => {
     const trimmedExpr = expression.trim();
     const dotIndex = trimmedExpr.indexOf('.');
     let nodeId: string;

@@ -7,6 +7,7 @@ import {
   removeEdge,
   updateNodeData,
   onConnect,
+  setWorkflowMeta,
 } from '../workflow/workflowSlice';
 import { captureSnapshot, type WorkflowSnapshot } from './historyActions';
 
@@ -24,6 +25,7 @@ const isHistoryTriggerAction = isAnyOf(
   removeEdge,
   updateNodeData,
   onConnect,
+  setWorkflowMeta,
 );
 
 /**

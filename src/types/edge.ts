@@ -6,6 +6,7 @@ import type { Edge } from '@xyflow/react';
 export interface WorkflowEdgeData {
   label?: string;
   condition?: 'true' | 'false';
+  edgeType?: 'default' | 'error';
   [key: string]: unknown;
 }
 

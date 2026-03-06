@@ -17,11 +17,56 @@ import type {
   ScheduleTriggerConfig,
   VariableSetConfig,
   VariableGetConfig,
+  LlmConfig,
+  EmailConfig,
+  RetryConfig,
 } from './types';
 import { ExecutionContext, isExpression, evaluateExpression } from './context';
 import { getDirectParents } from './graphUtils';
 import { getByPath, generateId, now } from './utils';
 import { isPrivateUrl, isPrivateRedirectTarget } from '../ssrf.js';
+import { resolveCredential } from '../credentialResolver.js';
+
+function sanitizeUrlForLog(url: string): string {
+  try {
+    const u = new URL(url);
+    u.search = '';
+    return u.toString();
+  } catch { return '[invalid url]'; }
+}
+
+// ─── Retry Helper (self-contained for server engine) ────────────────────────
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  config: RetryConfig | undefined,
+  isRetryable: (error: unknown) => boolean,
+  abortCheck?: () => boolean,
+): Promise<T> {
+  if (!config?.enabled) return fn();
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
+    try { return await fn(); } catch (error) {
+      lastError = error;
+      if (attempt === config.maxRetries || !isRetryable(error) || abortCheck?.()) throw error;
+      const delay = config.initialDelayMs * Math.pow(config.backoffMultiplier, attempt);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError;
+}
+
+function isRetryableStatusCode(status: number): boolean {
+  return status >= 500 || status === 429 || status === 408;
+}
+
+function isRetryableHttpError(error: unknown): boolean {
+  if (error instanceof Error) {
+    if (error.name === 'TypeError') return true;
+    if (error.message.includes('fetch') || error.message.includes('network')) return true;
+  }
+  return false;
+}
 
 // ─── HTTP Request Runner ────────────────────────────────────────────────────
 
@@ -45,103 +90,126 @@ async function runHttpRequest(
     resolvedHeaders[key] = String(context.resolveExpression(value));
   }
 
-  const combinedController = new AbortController();
   const timeoutMs = Math.min(config.timeout > 0 ? config.timeout : 30_000, 7_000);
-  const timeoutId = setTimeout(() => combinedController.abort(new Error('Request timed out')), timeoutMs);
-  const onContextAbort = () => combinedController.abort(context.signal.reason);
-  if (context.signal.aborted) {
-    clearTimeout(timeoutId);
-    combinedController.abort(context.signal.reason);
-  } else {
-    context.signal.addEventListener('abort', onContextAbort, { once: true });
-  }
 
-  const fetchOptions: RequestInit = {
-    method: config.method,
-    headers: resolvedHeaders,
-    signal: combinedController.signal,
-    redirect: 'manual', // Always handle redirects manually for SSRF safety
+  const doFetch = async (): Promise<unknown> => {
+    const combinedController = new AbortController();
+    const timeoutId = setTimeout(() => combinedController.abort(new Error('Request timed out')), timeoutMs);
+    const onContextAbort = () => combinedController.abort(context.signal.reason);
+    if (context.signal.aborted) {
+      clearTimeout(timeoutId);
+      combinedController.abort(context.signal.reason);
+    } else {
+      context.signal.addEventListener('abort', onContextAbort, { once: true });
+    }
+
+    const fetchOptions: RequestInit = {
+      method: config.method,
+      headers: resolvedHeaders,
+      signal: combinedController.signal,
+      redirect: 'manual', // Always handle redirects manually for SSRF safety
+    };
+
+    if (config.method !== 'GET' && resolvedBody) {
+      fetchOptions.body = resolvedBody;
+    }
+
+    const startTime = Date.now();
+
+    try {
+      let response: Response;
+      try {
+        response = await fetch(resolvedUrl, fetchOptions);
+      } catch (error: unknown) {
+        if (error instanceof Error && error.name === 'AbortError') {
+          if (context.isAborted()) {
+            throw new Error('HTTP request cancelled: workflow execution was aborted');
+          }
+          throw new Error(
+            `HTTP request timed out after ${timeoutMs}ms for ${config.method} ${sanitizeUrlForLog(resolvedUrl)}`,
+          );
+        }
+        if (error instanceof TypeError) {
+          throw new Error(
+            `HTTP request failed: network error for ${config.method} ${sanitizeUrlForLog(resolvedUrl)} — ${error.message}`,
+          );
+        }
+        throw new Error(
+          `HTTP request failed for ${config.method} ${sanitizeUrlForLog(resolvedUrl)}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+
+      // Handle redirects: validate redirect target against SSRF before following
+      if (config.followRedirects && response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location');
+        if (location) {
+          if (isPrivateRedirectTarget(location, resolvedUrl)) {
+            throw new Error('Redirect target points to a private/internal address');
+          }
+          response = await fetch(new URL(location, resolvedUrl).toString(), {
+            ...fetchOptions,
+            redirect: 'manual',
+          });
+        }
+      }
+
+      const duration = Date.now() - startTime;
+
+      const responseHeaders: Record<string, string> = {};
+      response.headers.forEach((value, key) => {
+        responseHeaders[key] = value;
+      });
+
+      let body: unknown;
+      const contentType = response.headers.get('content-type') ?? '';
+
+      try {
+        if (contentType.includes('application/json')) {
+          body = await response.json();
+        } else {
+          const text = await response.text();
+          try {
+            body = JSON.parse(text);
+          } catch {
+            body = text;
+          }
+        }
+      } catch {
+        body = null;
+      }
+
+      const result = {
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders,
+        body,
+        duration,
+      };
+
+      // If retries are enabled and this is a retryable status, throw to trigger retry
+      if (config.retry?.enabled && isRetryableStatusCode(response.status)) {
+        const err = new Error(`HTTP ${response.status}: ${response.statusText}`);
+        (err as any).result = result;
+        throw err;
+      }
+
+      return result;
+    } finally {
+      clearTimeout(timeoutId);
+      context.signal.removeEventListener('abort', onContextAbort);
+    }
   };
 
-  if (config.method !== 'GET' && resolvedBody) {
-    fetchOptions.body = resolvedBody;
-  }
-
-  const startTime = Date.now();
-
   try {
-    let response: Response;
-    try {
-      response = await fetch(resolvedUrl, fetchOptions);
-    } catch (error: unknown) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        if (context.isAborted()) {
-          throw new Error('HTTP request cancelled: workflow execution was aborted');
-        }
-        throw new Error(
-          `HTTP request timed out after ${timeoutMs}ms for ${config.method} ${resolvedUrl}`,
-        );
-      }
-      if (error instanceof TypeError) {
-        throw new Error(
-          `HTTP request failed: network error for ${config.method} ${resolvedUrl} — ${error.message}`,
-        );
-      }
-      throw new Error(
-        `HTTP request failed for ${config.method} ${resolvedUrl}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-
-    // Handle redirects: validate redirect target against SSRF before following
-    if (config.followRedirects && response.status >= 300 && response.status < 400) {
-      const location = response.headers.get('location');
-      if (location) {
-        if (isPrivateRedirectTarget(location, resolvedUrl)) {
-          throw new Error('Redirect target points to a private/internal address');
-        }
-        // Follow the safe redirect
-        response = await fetch(new URL(location, resolvedUrl).toString(), {
-          ...fetchOptions,
-          redirect: 'manual',
-        });
-      }
-    }
-
-    const duration = Date.now() - startTime;
-
-    const responseHeaders: Record<string, string> = {};
-    response.headers.forEach((value, key) => {
-      responseHeaders[key] = value;
-    });
-
-    let body: unknown;
-    const contentType = response.headers.get('content-type') ?? '';
-
-    try {
-      if (contentType.includes('application/json')) {
-        body = await response.json();
-      } else {
-        const text = await response.text();
-        try {
-          body = JSON.parse(text);
-        } catch {
-          body = text;
-        }
-      }
-    } catch {
-      body = null;
-    }
-
-    return {
-      status: response.status,
-      statusText: response.statusText,
-      headers: responseHeaders,
-      body,
-      duration,
-    };
-  } finally {
-    clearTimeout(timeoutId);
-    context.signal.removeEventListener('abort', onContextAbort);
+    return await withRetry(
+      doFetch,
+      config.retry,
+      (error) => isRetryableHttpError(error) || (error as any)?.result !== undefined,
+      () => context.isAborted(),
+    );
+  } catch (error: any) {
+    if (error?.result) return error.result;
+    throw error;
   }
 }
 
@@ -197,83 +265,72 @@ async function runCode(
   const input = collectInputData(nodeId, context, edges);
   const variables = context.getAllVariables();
   const CODE_TIMEOUT = 5_000;
-  const logs: string[] = [];
 
-  const customConsole = {
-    log: (...args: unknown[]) => {
-      logs.push(args.map(safeStringify).join(' '));
-    },
-    warn: (...args: unknown[]) => {
-      logs.push(`[WARN] ${args.map(safeStringify).join(' ')}`);
-    },
-    error: (...args: unknown[]) => {
-      logs.push(`[ERROR] ${args.map(safeStringify).join(' ')}`);
-    },
-    info: (...args: unknown[]) => {
-      logs.push(`[INFO] ${args.map(safeStringify).join(' ')}`);
-    },
-  };
+  const executeCode = async (): Promise<unknown> => {
+    const logs: string[] = [];
 
-  try {
-    // C1+C2: Use vm.runInNewContext instead of new Function() for proper sandboxing.
-    // Build a minimal sandbox with only safe globals.
-    const sandbox: Record<string, unknown> = {
-      JSON,
-      Math,
-      Date,
-      Array,
-      Object,
-      String,
-      Number,
-      Boolean,
-      RegExp,
-      Map,
-      Set,
-      Error,
-      TypeError,
-      RangeError,
-      parseInt,
-      parseFloat,
-      isNaN,
-      isFinite,
-      encodeURIComponent,
-      decodeURIComponent,
-      Promise,
-      undefined,
-      NaN,
-      Infinity,
-      input: deepFreeze(structuredClone(input)),
-      context: deepFreeze(structuredClone(variables)),
-      console: customConsole,
+    const customConsole = {
+      log: (...args: unknown[]) => {
+        logs.push(args.map(safeStringify).join(' '));
+      },
+      warn: (...args: unknown[]) => {
+        logs.push(`[WARN] ${args.map(safeStringify).join(' ')}`);
+      },
+      error: (...args: unknown[]) => {
+        logs.push(`[ERROR] ${args.map(safeStringify).join(' ')}`);
+      },
+      info: (...args: unknown[]) => {
+        logs.push(`[INFO] ${args.map(safeStringify).join(' ')}`);
+      },
     };
 
-    // Wrap user code in an async IIFE so return statements and await work
-    const wrappedCode = `(async function() { ${config.code} })()`;
-    const script = new vm.Script(wrappedCode, { filename: 'user-code.js' });
+    try {
+      // C1+C2: Use vm.runInNewContext instead of new Function() for proper sandboxing.
+      // Use Object.create(null) as base — do NOT pass host-realm constructors
+      // (Array, Object, Error, Promise, etc.) to prevent sandbox escape via
+      // e.g. Error.constructor('return process')().
+      // The vm context will provide its own intrinsics automatically.
+      const sandbox = Object.create(null) as Record<string, unknown>;
+      sandbox.input = deepFreeze(structuredClone(input));
+      sandbox.context = deepFreeze(structuredClone(variables));
+      sandbox.console = customConsole;
+      // Defense-in-depth: explicitly block dangerous globals
+      sandbox.require = undefined;
+      sandbox.process = undefined;
+      sandbox.global = undefined;
+      sandbox.globalThis = undefined;
 
-    // Run with V8-level timeout (kills sync infinite loops)
-    const resultPromise = script.runInNewContext(sandbox, { timeout: CODE_TIMEOUT });
+      // Wrap user code in an async IIFE so return statements and await work
+      const wrappedCode = `(async function() { ${config.code} })()`;
+      const script = new vm.Script(wrappedCode, { filename: 'user-code.js' });
 
-    // For async code, add a secondary Promise.race timeout
-    let settled = false;
-    const result = await Promise.race([
-      resultPromise,
-      new Promise<never>((_, reject) => {
-        setTimeout(() => {
-          if (!settled) {
-            settled = true;
+      // Run with V8-level timeout (kills sync infinite loops)
+      const resultPromise = script.runInNewContext(sandbox, { timeout: CODE_TIMEOUT });
+
+      // For async code, add a secondary Promise.race timeout
+      let timer: ReturnType<typeof setTimeout>;
+      const result = await Promise.race([
+        resultPromise,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
             reject(new Error(`Code execution timed out after ${CODE_TIMEOUT}ms`));
-          }
-        }, CODE_TIMEOUT);
-      }),
-    ]);
-    settled = true;
+          }, CODE_TIMEOUT);
+        }),
+      ]).finally(() => clearTimeout(timer));
 
-    return { returned: result, logs };
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Code execution failed: ${message}`);
-  }
+      return { returned: result, logs };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Code execution failed: ${message}`);
+    }
+  };
+
+  return withRetry(
+    executeCode,
+    config.retry,
+    (error) => error instanceof Error && error.message.includes('timed out'),
+    () => context.isAborted(),
+  );
 }
 
 // ─── Conditional Runner ─────────────────────────────────────────────────────
@@ -377,16 +434,20 @@ async function runConditional(
 
   const evaluatedConditions = config.conditions.map((c) => evaluateCondition(c, context));
 
-  let combinedResult = evaluatedConditions[0].result;
+  // Evaluate with AND having higher precedence than OR:
+  // Split conditions into OR-groups (groups separated by OR operators),
+  // AND all conditions within each group, then OR the group results.
+  const orGroups: boolean[][] = [[evaluatedConditions[0].result]];
   for (let i = 1; i < config.conditions.length; i++) {
     const logicalOp = config.conditions[i].logicalOp;
     const conditionResult = evaluatedConditions[i].result;
-    if (logicalOp === 'and') {
-      combinedResult = combinedResult && conditionResult;
+    if (logicalOp === 'or') {
+      orGroups.push([conditionResult]);
     } else {
-      combinedResult = combinedResult || conditionResult;
+      orGroups[orGroups.length - 1].push(conditionResult);
     }
   }
+  const combinedResult = orGroups.some(group => group.every(Boolean));
 
   return { result: combinedResult, evaluatedConditions };
 }
@@ -754,14 +815,30 @@ async function runWebhookTrigger(
 
 async function runScheduleTrigger(
   config: ScheduleTriggerConfig,
-  _context: ExecutionContext,
+  context: ExecutionContext,
 ): Promise<unknown> {
+  // Check if triggered by a real QStash call via the webhook endpoint
+  const webhookPayload = context.getVariable('$webhookPayload');
+  if (webhookPayload && typeof webhookPayload === 'object') {
+    return {
+      ...(webhookPayload as Record<string, unknown>),
+      cron: config.cron,
+      timezone: config.timezone,
+      enabled: config.enabled,
+      triggeredAt: new Date().toISOString(),
+      triggered: true,
+      source: 'qstash',
+    };
+  }
+
+  // Fallback: simulated data (manual run / client-side)
   return {
     cron: config.cron,
     timezone: config.timezone,
     enabled: config.enabled,
     triggeredAt: new Date().toISOString(),
     triggered: true,
+    source: 'manual',
   };
 }
 
@@ -810,6 +887,263 @@ async function runVariableGet(
   }
 
   return { variable: config.variableName, value: defaultValue ?? null, usedDefault: true };
+}
+
+// ─── LLM Runner ─────────────────────────────────────────────────────────────
+
+async function callAnthropicServer(
+  config: LlmConfig,
+  resolvedSystemPrompt: string,
+  resolvedUserPrompt: string,
+  context: ExecutionContext,
+): Promise<unknown> {
+  const combinedController = new AbortController();
+  const timeoutMs = 7_000;
+  const timeoutId = setTimeout(() => combinedController.abort(new Error('Request timed out')), timeoutMs);
+  const onContextAbort = () => combinedController.abort(context.signal.reason ?? new Error('Workflow cancelled'));
+  if (context.signal.aborted) {
+    clearTimeout(timeoutId);
+    combinedController.abort(context.signal.reason ?? new Error('Workflow cancelled'));
+  } else {
+    context.signal.addEventListener('abort', onContextAbort, { once: true });
+  }
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': config.apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: config.model,
+        max_tokens: config.maxTokens,
+        temperature: config.temperature,
+        system: resolvedSystemPrompt || undefined,
+        messages: [{ role: 'user', content: resolvedUserPrompt }],
+      }),
+      signal: combinedController.signal,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => null) as { error?: { message?: string } } | null;
+      throw new Error(
+        errorData?.error?.message ?? `Anthropic API request failed with status ${response.status}`,
+      );
+    }
+
+    const data = await response.json() as {
+      content: { text: string }[];
+      model: string;
+      usage: { input_tokens: number; output_tokens: number };
+    };
+
+    const text = data.content?.[0]?.text;
+    if (text === undefined || text === null) {
+      throw new Error('Anthropic API returned an empty response (no content)');
+    }
+
+    return {
+      response: text,
+      model: data.model,
+      usage: {
+        inputTokens: data.usage.input_tokens,
+        outputTokens: data.usage.output_tokens,
+      },
+      provider: 'anthropic',
+    };
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      if (context.isAborted()) {
+        throw new Error('LLM request cancelled: workflow execution was aborted');
+      }
+      throw new Error(`LLM request to Anthropic timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+    context.signal.removeEventListener('abort', onContextAbort);
+  }
+}
+
+async function callOpenAIServer(
+  config: LlmConfig,
+  resolvedSystemPrompt: string,
+  resolvedUserPrompt: string,
+  context: ExecutionContext,
+): Promise<unknown> {
+  const combinedController = new AbortController();
+  const timeoutMs = 7_000;
+  const timeoutId = setTimeout(() => combinedController.abort(new Error('Request timed out')), timeoutMs);
+  const onContextAbort = () => combinedController.abort(context.signal.reason ?? new Error('Workflow cancelled'));
+  if (context.signal.aborted) {
+    clearTimeout(timeoutId);
+    combinedController.abort(context.signal.reason ?? new Error('Workflow cancelled'));
+  } else {
+    context.signal.addEventListener('abort', onContextAbort, { once: true });
+  }
+
+  const messages: { role: string; content: string }[] = [];
+  if (resolvedSystemPrompt) {
+    messages.push({ role: 'system', content: resolvedSystemPrompt });
+  }
+  messages.push({ role: 'user', content: resolvedUserPrompt });
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${config.apiKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: config.model,
+        max_tokens: config.maxTokens,
+        temperature: config.temperature,
+        messages,
+      }),
+      signal: combinedController.signal,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => null) as { error?: { message?: string } } | null;
+      throw new Error(
+        errorData?.error?.message ?? `OpenAI API request failed with status ${response.status}`,
+      );
+    }
+
+    const data = await response.json() as {
+      choices: { message: { content: string } }[];
+      model: string;
+      usage: { prompt_tokens: number; completion_tokens: number };
+    };
+
+    const content = data.choices?.[0]?.message?.content;
+    if (content === undefined || content === null) {
+      throw new Error('OpenAI API returned an empty response (no choices)');
+    }
+
+    return {
+      response: content,
+      model: data.model,
+      usage: {
+        inputTokens: data.usage.prompt_tokens,
+        outputTokens: data.usage.completion_tokens,
+      },
+      provider: 'openai',
+    };
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      if (context.isAborted()) {
+        throw new Error('LLM request cancelled: workflow execution was aborted');
+      }
+      throw new Error(`LLM request to OpenAI timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+    context.signal.removeEventListener('abort', onContextAbort);
+  }
+}
+
+async function runLlm(
+  config: LlmConfig,
+  context: ExecutionContext,
+): Promise<unknown> {
+  const resolvedUserPrompt = String(context.resolveExpression(config.userPrompt));
+  const resolvedSystemPrompt = config.systemPrompt
+    ? String(context.resolveExpression(config.systemPrompt))
+    : '';
+
+  // Resolve credential if credentialId is set
+  let apiKey = config.apiKey;
+  if (config.credentialId) {
+    const userId = context.getUserId();
+    if (!userId) throw new Error('User context required for credential resolution');
+    apiKey = await resolveCredential(userId, config.credentialId);
+  }
+  if (!apiKey) {
+    throw new Error('LLM API key is required. Add your API key in the node configuration.');
+  }
+
+  const resolvedConfig = { ...config, apiKey };
+
+  if (config.provider === 'anthropic') {
+    return callAnthropicServer(resolvedConfig, resolvedSystemPrompt, resolvedUserPrompt, context);
+  } else {
+    return callOpenAIServer(resolvedConfig, resolvedSystemPrompt, resolvedUserPrompt, context);
+  }
+}
+
+// ─── Email Runner ────────────────────────────────────────────────────────────
+
+async function runEmail(
+  config: EmailConfig,
+  context: ExecutionContext,
+): Promise<unknown> {
+  const resolvedTo = String(context.resolveExpression(config.to));
+  const resolvedFrom = String(context.resolveExpression(config.from));
+  const resolvedSubject = String(context.resolveExpression(config.subject));
+  const resolvedBody = String(context.resolveExpression(config.body));
+
+  // Resolve credential if credentialId is set
+  let apiKey = config.apiKey;
+  if (config.credentialId) {
+    const userId = context.getUserId();
+    if (!userId) throw new Error('User context required for credential resolution');
+    apiKey = await resolveCredential(userId, config.credentialId);
+  }
+  if (!apiKey) {
+    throw new Error('Resend API key is required. Add your API key in the node configuration.');
+  }
+
+  const combinedController = new AbortController();
+  const timeoutMs = 7_000;
+  const timeoutId = setTimeout(() => combinedController.abort(new Error('Request timed out')), timeoutMs);
+  const onContextAbort = () => combinedController.abort(context.signal.reason);
+  if (context.signal.aborted) {
+    clearTimeout(timeoutId);
+    combinedController.abort(context.signal.reason);
+  } else {
+    context.signal.addEventListener('abort', onContextAbort, { once: true });
+  }
+
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: resolvedFrom,
+        to: [resolvedTo],
+        subject: resolvedSubject,
+        [config.bodyType === 'html' ? 'html' : 'text']: resolvedBody,
+      }),
+      signal: combinedController.signal,
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`Resend API error (${response.status}): ${errorBody}`);
+    }
+
+    const data = await response.json() as { id: string };
+    return { id: data.id, from: resolvedFrom, to: resolvedTo, subject: resolvedSubject };
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      if (context.isAborted()) {
+        throw new Error('Email request cancelled: workflow execution was aborted');
+      }
+      throw new Error(`Email request to Resend timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+    context.signal.removeEventListener('abort', onContextAbort);
+  }
 }
 
 // ─── Node Dispatcher ────────────────────────────────────────────────────────
@@ -883,6 +1217,12 @@ export async function runNode(
         break;
       case 'variableGet':
         output = await runVariableGet(config as VariableGetConfig, context);
+        break;
+      case 'llm':
+        output = await runLlm(config as LlmConfig, context);
+        break;
+      case 'email':
+        output = await runEmail(config as EmailConfig, context);
         break;
       default: {
         const exhaustiveCheck: never = nodeType;

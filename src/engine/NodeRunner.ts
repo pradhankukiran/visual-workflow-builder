@@ -15,6 +15,8 @@ import type {
   ScheduleTriggerConfig,
   VariableSetConfig,
   VariableGetConfig,
+  LlmConfig,
+  EmailConfig,
 } from '../types';
 import type { ExecutionContext } from './ExecutionContext';
 import { generateLogId } from '../utils/idGenerator';
@@ -32,6 +34,8 @@ import { runWebhookTrigger } from './runners/webhookRunner';
 import { runScheduleTrigger } from './runners/scheduleRunner';
 import { runVariableSet } from './runners/varSetRunner';
 import { runVariableGet } from './runners/varGetRunner';
+import { runLlm } from './runners/llmRunner';
+import { runEmail } from './runners/emailRunner';
 
 /**
  * Dispatch execution to the correct runner based on node type.
@@ -146,6 +150,14 @@ export async function runNode(
 
       case 'variableGet':
         output = await runVariableGet(config as VariableGetConfig, context);
+        break;
+
+      case 'llm':
+        output = await runLlm(config as LlmConfig, context);
+        break;
+
+      case 'email':
+        output = await runEmail(config as EmailConfig, context);
         break;
 
       default: {

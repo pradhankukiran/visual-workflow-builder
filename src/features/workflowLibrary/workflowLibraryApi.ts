@@ -1,6 +1,7 @@
-import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+import { createApi } from '@reduxjs/toolkit/query/react';
 import type { Workflow, WorkflowMetadata } from '@/types';
 import { workflowToMetadata } from './workflowLibraryTransforms';
+import { authBaseQuery } from '@/auth/authBaseQuery';
 
 /**
  * Extract a clean error message from API error responses.
@@ -18,16 +19,10 @@ const transformErrorResponse = (response: { status: number; data?: { error?: { m
  */
 export const workflowLibraryApi = createApi({
   reducerPath: 'workflowLibraryApi',
-  baseQuery: fetchBaseQuery({
-    baseUrl: '/api',
-    prepareHeaders: (headers) => {
-      headers.set('X-Client-Source', 'visual-workflow-builder');
-      return headers;
-    },
-  }),
+  baseQuery: authBaseQuery,
   refetchOnFocus: true,
   refetchOnReconnect: true,
-  tagTypes: ['Workflow', 'WorkflowList'],
+  tagTypes: ['Workflow', 'WorkflowList', 'Schedule'],
   endpoints: (builder) => ({
     /**
      * List all workflows (returns metadata only).
@@ -120,6 +115,16 @@ export const workflowLibraryApi = createApi({
     }),
 
     /**
+     * Get the schedule status for a workflow.
+     */
+    getScheduleStatus: builder.query<{ scheduleId: string; active: boolean } | null, string>({
+      query: (workflowId) => `/schedules/${workflowId}`,
+      transformResponse: (response: { data: { scheduleId: string; active: boolean } | null }) => response.data,
+      transformErrorResponse,
+      providesTags: (_result, _error, workflowId) => [{ type: 'Schedule', id: workflowId }],
+    }),
+
+    /**
      * Delete a workflow by ID.
      * Includes optimistic update to remove from the list immediately.
      */
@@ -166,6 +171,7 @@ export const workflowLibraryApi = createApi({
 export const {
   useGetWorkflowsQuery,
   useGetWorkflowQuery,
+  useGetScheduleStatusQuery,
   useSaveWorkflowMutation,
   useDeleteWorkflowMutation,
   usePrefetch,

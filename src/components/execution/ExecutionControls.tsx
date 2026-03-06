@@ -10,7 +10,7 @@ import {
   selectIsExecuting,
 } from '@/features/execution/executionSelectors';
 import { selectAllNodes } from '@/features/workflow/workflowSelectors';
-import { useTriggerExecutionMutation } from '@/features/execution/executionApi';
+import { useTriggerExecutionMutation, useGetExecutionQuery } from '@/features/execution/executionApi';
 import StatusBadge from '@/components/shared/StatusBadge';
 import { formatDuration } from '@/utils/dateUtils';
 
@@ -30,8 +30,7 @@ export default function ExecutionControls() {
   const workflowId = useAppSelector((state) => state.workflow.id);
 
   // Store the thunk promise so we can abort it.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const thunkPromiseRef = useRef<any>(null);
+  const thunkPromiseRef = useRef<{ abort?: () => void } | null>(null);
 
   // Dropdown state
   const [showDropdown, setShowDropdown] = useState(false);
@@ -39,6 +38,23 @@ export default function ExecutionControls() {
 
   // Server execution mutation
   const [triggerExecution, { isLoading: isServerExecuting }] = useTriggerExecutionMutation();
+
+  // Durable execution polling
+  const [durableRunId, setDurableRunId] = useState<string | null>(null);
+  const isDurablePolling = durableRunId !== null;
+  const { data: polledRun } = useGetExecutionQuery(durableRunId!, {
+    skip: !durableRunId,
+    pollingInterval: durableRunId ? 2000 : 0,
+  });
+
+  // When polled run completes, update the UI and stop polling
+  useEffect(() => {
+    if (!polledRun || !durableRunId) return;
+    dispatch(setCurrentRun(polledRun));
+    if (polledRun.status === 'completed' || polledRun.status === 'failed' || polledRun.status === 'cancelled') {
+      setDurableRunId(null);
+    }
+  }, [polledRun, durableRunId, dispatch]);
 
   // Elapsed time counter while running
   const [elapsed, setElapsed] = useState(0);
@@ -57,9 +73,19 @@ export default function ExecutionControls() {
     }
   }, [showDropdown]);
 
+  // Close dropdown on Escape key
+  useEffect(() => {
+    if (!showDropdown) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowDropdown(false);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [showDropdown]);
+
   // Start / stop the elapsed timer based on execution state.
   useEffect(() => {
-    if ((isExecuting || isServerExecuting) && currentRun?.startedAt) {
+    if ((isExecuting || isServerExecuting || isDurablePolling) && currentRun?.startedAt) {
       const startTime = new Date(currentRun.startedAt).getTime();
 
       // Immediately set the current elapsed value
@@ -87,7 +113,7 @@ export default function ExecutionControls() {
         intervalRef.current = null;
       }
     };
-  }, [isExecuting, isServerExecuting, currentRun?.startedAt, currentRun?.completedAt]);
+  }, [isExecuting, isServerExecuting, isDurablePolling, currentRun?.startedAt, currentRun?.completedAt]);
 
   const handleRun = useCallback(() => {
     if (isExecuting || nodes.length === 0) return;
@@ -98,7 +124,7 @@ export default function ExecutionControls() {
   }, [dispatch, isExecuting, nodes.length]);
 
   const handleRunOnServer = useCallback(async () => {
-    if (isExecuting || isServerExecuting || nodes.length === 0) return;
+    if (isExecuting || isServerExecuting || isDurablePolling || nodes.length === 0) return;
     setElapsed(0);
     setShowDropdown(false);
 
@@ -120,30 +146,56 @@ export default function ExecutionControls() {
         message: `Server execution failed: ${errorMessage}`,
       }));
     }
-  }, [dispatch, isExecuting, isServerExecuting, nodes.length, triggerExecution, workflowId]);
+  }, [dispatch, isExecuting, isServerExecuting, isDurablePolling, nodes.length, triggerExecution, workflowId]);
+
+  const handleRunDurable = useCallback(async () => {
+    if (isExecuting || isServerExecuting || isDurablePolling || nodes.length === 0) return;
+    setElapsed(0);
+    setShowDropdown(false);
+
+    dispatch(setExecutionStatus('running'));
+
+    try {
+      const run = await triggerExecution({ workflowId, mode: 'durable' }).unwrap();
+      dispatch(setCurrentRun(run));
+      // Start polling for updates
+      setDurableRunId(run.id);
+    } catch (error: unknown) {
+      console.error('Durable execution failed:', error);
+      dispatch(setExecutionStatus('failed'));
+      const rtkError = error as { data?: { error?: { message?: string } }; message?: string };
+      const errorMessage = rtkError?.data?.error?.message ?? rtkError?.message ?? 'Unknown error';
+      dispatch(addToast({
+        type: 'error',
+        message: `Durable execution failed: ${errorMessage}`,
+      }));
+    }
+  }, [dispatch, isExecuting, isServerExecuting, isDurablePolling, nodes.length, triggerExecution, workflowId]);
 
   const handleStop = useCallback(() => {
     if (thunkPromiseRef.current?.abort) {
       thunkPromiseRef.current.abort();
       thunkPromiseRef.current = null;
-    } else if (isServerExecuting) {
+    } else if (isServerExecuting || isDurablePolling) {
       // H9: Server executions cannot be cancelled — update UI state and warn
       dispatch(setExecutionStatus('cancelled'));
+      setDurableRunId(null);
       dispatch(addToast({
         type: 'warning',
         message: 'Server execution cannot be stopped remotely. It will complete on the server.',
       }));
     }
-  }, [dispatch, isServerExecuting]);
+  }, [dispatch, isServerExecuting, isDurablePolling]);
 
   const handleClear = useCallback(() => {
     dispatch(clearExecutionHistory());
     setElapsed(0);
+    setDurableRunId(null);
     thunkPromiseRef.current = null;
   }, [dispatch]);
 
   const isEmpty = nodes.length === 0;
-  const anyExecuting = isExecuting || isServerExecuting;
+  const anyExecuting = isExecuting || isServerExecuting || isDurablePolling;
   const showStatus = status !== 'idle';
 
   return (
@@ -200,6 +252,7 @@ export default function ExecutionControls() {
           {/* Dropdown menu */}
           {showDropdown && (
             <div
+              role="menu"
               className={clsx(
                 'absolute top-full left-0 mt-1 py-1 rounded-lg shadow-lg z-50 min-w-[160px]',
                 'bg-[var(--color-surface-elevated)] border border-[var(--color-border)]',
@@ -207,6 +260,7 @@ export default function ExecutionControls() {
             >
               <button
                 type="button"
+                role="menuitem"
                 onClick={handleRun}
                 className={clsx(
                   'w-full text-left px-3 py-1.5 text-xs',
@@ -219,6 +273,7 @@ export default function ExecutionControls() {
               </button>
               <button
                 type="button"
+                role="menuitem"
                 onClick={handleRunOnServer}
                 className={clsx(
                   'w-full text-left px-3 py-1.5 text-xs',
@@ -228,6 +283,19 @@ export default function ExecutionControls() {
               >
                 <div className="font-medium">Run on Server</div>
                 <div className="text-[10px] text-[var(--color-text-muted)]">Server-side, no CORS limits</div>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={handleRunDurable}
+                className={clsx(
+                  'w-full text-left px-3 py-1.5 text-xs',
+                  'text-[var(--color-text)] hover:bg-[var(--color-surface)]',
+                  'transition-all-fast',
+                )}
+              >
+                <div className="font-medium">Run Durable</div>
+                <div className="text-[10px] text-[var(--color-text-muted)]">Long-running, survives timeouts</div>
               </button>
             </div>
           )}

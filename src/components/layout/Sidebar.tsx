@@ -23,9 +23,10 @@ const CATEGORY_META: Record<NodeCategory, { label: string; color: string }> = {
   logic: { label: 'Logic', color: 'var(--color-node-logic)' },
   output: { label: 'Output', color: 'var(--color-node-output)' },
   data: { label: 'Data', color: 'var(--color-node-data)' },
+  ai: { label: 'AI', color: '#A855F7' },
 };
 
-const CATEGORY_ORDER: NodeCategory[] = ['trigger', 'action', 'logic', 'output', 'data'];
+const CATEGORY_ORDER: NodeCategory[] = ['trigger', 'action', 'ai', 'logic', 'output', 'data'];
 
 // ========================================
 // WorkflowCountBadge — uses selectFromResult

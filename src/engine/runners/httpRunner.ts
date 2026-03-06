@@ -1,5 +1,25 @@
 import type { HttpRequestConfig } from '../../types';
 import type { ExecutionContext } from '../ExecutionContext';
+import { withRetry, isRetryableHttpError, isRetryableStatusCode } from '../retry';
+
+/** Symbol to tag errors that carry an HTTP result (retryable status codes). */
+const HTTP_RESULT_ERROR = Symbol('HttpResultError');
+
+interface HttpResultError extends Error {
+  [HTTP_RESULT_ERROR]: true;
+  result: HttpRunnerResult;
+}
+
+function createHttpResultError(message: string, result: HttpRunnerResult): HttpResultError {
+  const err = new Error(message) as HttpResultError;
+  err[HTTP_RESULT_ERROR] = true;
+  err.result = result;
+  return err;
+}
+
+function isHttpResultError(error: unknown): error is HttpResultError {
+  return typeof error === 'object' && error !== null && HTTP_RESULT_ERROR in error;
+}
 
 export interface HttpRunnerResult {
   status: number;
@@ -30,13 +50,14 @@ async function fetchViaProxy(
   body: string | undefined,
   timeout: number,
   signal: AbortSignal,
+  followRedirects?: boolean,
 ): Promise<HttpRunnerResult> {
   const startTime = performance.now();
 
   const proxyResponse = await fetch('/api/proxy', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Client-Source': 'visual-workflow-builder' },
-    body: JSON.stringify({ url, method, headers, body, timeout }),
+    body: JSON.stringify({ url, method, headers, body, timeout, followRedirects }),
     signal,
   });
 
@@ -82,146 +103,168 @@ export async function runHttpRequest(
     : undefined;
 
   const resolvedHeaders: Record<string, string> = {};
-  for (const [key, value] of Object.entries(config.headers)) {
+  for (const [key, value] of Object.entries(config.headers ?? {})) {
     resolvedHeaders[key] = String(context.resolveExpression(value));
   }
 
   const timeoutMs = config.timeout > 0 ? config.timeout : 30_000;
 
-  // Route cross-origin requests through server-side proxy
-  if (isCrossOrigin(resolvedUrl)) {
-    // Build a combined abort controller for timeout + context abort
+  // Wrap the entire fetch logic (both cross-origin and same-origin) in a
+  // helper so it can be retried via withRetry.
+  const doFetch = async (): Promise<HttpRunnerResult> => {
+    // Route cross-origin requests through server-side proxy
+    if (isCrossOrigin(resolvedUrl)) {
+      const combinedController = new AbortController();
+      const timeoutId = setTimeout(() => combinedController.abort(new Error('Request timed out')), timeoutMs);
+      const onContextAbort = () => combinedController.abort(context.signal.reason ?? new Error('Workflow cancelled'));
+      if (context.signal.aborted) {
+        clearTimeout(timeoutId);
+        combinedController.abort(context.signal.reason ?? new Error('Workflow cancelled'));
+      } else {
+        context.signal.addEventListener('abort', onContextAbort, { once: true });
+      }
+
+      try {
+        const result = await fetchViaProxy(
+          resolvedUrl,
+          config.method,
+          resolvedHeaders,
+          config.method !== 'GET' ? resolvedBody : undefined,
+          timeoutMs,
+          combinedController.signal,
+          config.followRedirects,
+        );
+
+        // If retries are enabled and this is a retryable status, throw to trigger retry
+        if (config.retry?.enabled && isRetryableStatusCode(result.status)) {
+          throw createHttpResultError(`HTTP ${result.status}: ${result.statusText}`, result);
+        }
+
+        return result;
+      } catch (error: unknown) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          if (context.isAborted()) {
+            throw new Error('HTTP request cancelled: workflow execution was aborted');
+          }
+          throw new Error(
+            `HTTP request timed out after ${timeoutMs}ms for ${config.method} ${resolvedUrl}`,
+          );
+        }
+        throw error;
+      } finally {
+        clearTimeout(timeoutId);
+        context.signal.removeEventListener('abort', onContextAbort);
+      }
+    }
+
+    // Same-origin: direct fetch
     const combinedController = new AbortController();
     const timeoutId = setTimeout(() => combinedController.abort(new Error('Request timed out')), timeoutMs);
-    const onContextAbort = () => combinedController.abort(context.signal.reason);
+    const onContextAbort = () => combinedController.abort(context.signal.reason ?? new Error('Workflow cancelled'));
     if (context.signal.aborted) {
       clearTimeout(timeoutId);
-      combinedController.abort(context.signal.reason);
+      combinedController.abort(context.signal.reason ?? new Error('Workflow cancelled'));
     } else {
       context.signal.addEventListener('abort', onContextAbort, { once: true });
     }
 
+    const fetchOptions: RequestInit = {
+      method: config.method,
+      headers: resolvedHeaders,
+      signal: combinedController.signal,
+    };
+
+    if (config.method !== 'GET' && resolvedBody) {
+      fetchOptions.body = resolvedBody;
+    }
+
+    if (!config.followRedirects) {
+      fetchOptions.redirect = 'manual';
+    }
+
+    const startTime = performance.now();
+
     try {
-      return await fetchViaProxy(
-        resolvedUrl,
-        config.method,
-        resolvedHeaders,
-        config.method !== 'GET' ? resolvedBody : undefined,
-        timeoutMs,
-        combinedController.signal,
-      );
-    } catch (error: unknown) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        if (context.isAborted()) {
-          throw new Error('HTTP request cancelled: workflow execution was aborted');
+      let response: Response;
+      try {
+        response = await fetch(resolvedUrl, fetchOptions);
+      } catch (error: unknown) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          if (context.isAborted()) {
+            throw new Error('HTTP request cancelled: workflow execution was aborted');
+          }
+          throw new Error(
+            `HTTP request timed out after ${timeoutMs}ms for ${config.method} ${resolvedUrl}`,
+          );
         }
+
+        if (error instanceof TypeError) {
+          throw new Error(
+            `HTTP request failed: network error for ${config.method} ${resolvedUrl} — ${error.message}`,
+          );
+        }
+
         throw new Error(
-          `HTTP request timed out after ${timeoutMs}ms for ${config.method} ${resolvedUrl}`,
+          `HTTP request failed for ${config.method} ${resolvedUrl}: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
-      throw error;
+
+      const duration = performance.now() - startTime;
+
+      const responseHeaders: Record<string, string> = {};
+      response.headers.forEach((value, key) => {
+        responseHeaders[key] = value;
+      });
+
+      let body: unknown;
+      const contentType = response.headers.get('content-type') ?? '';
+
+      try {
+        if (contentType.includes('application/json')) {
+          body = await response.json();
+        } else {
+          const text = await response.text();
+          try {
+            body = JSON.parse(text);
+          } catch {
+            body = text;
+          }
+        }
+      } catch {
+        body = null;
+      }
+
+      const result: HttpRunnerResult = {
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders,
+        body,
+        duration: Math.round(duration),
+      };
+
+      // If retries are enabled and this is a retryable status, throw to trigger retry
+      if (config.retry?.enabled && isRetryableStatusCode(response.status)) {
+        throw createHttpResultError(`HTTP ${response.status}: ${response.statusText}`, result);
+      }
+
+      return result;
     } finally {
       clearTimeout(timeoutId);
       context.signal.removeEventListener('abort', onContextAbort);
     }
-  }
-
-  // Same-origin: direct fetch (original behavior)
-
-  // Build the abort signal: combine context signal with timeout using a manual
-  // AbortController so we don't rely on AbortSignal.any() / AbortSignal.timeout()
-  // which aren't available in all browsers.
-  const combinedController = new AbortController();
-  const timeoutId = setTimeout(() => combinedController.abort(new Error('Request timed out')), timeoutMs);
-  const onContextAbort = () => combinedController.abort(context.signal.reason);
-  if (context.signal.aborted) {
-    clearTimeout(timeoutId);
-    combinedController.abort(context.signal.reason);
-  } else {
-    context.signal.addEventListener('abort', onContextAbort, { once: true });
-  }
-
-  // Build fetch options
-  const fetchOptions: RequestInit = {
-    method: config.method,
-    headers: resolvedHeaders,
-    signal: combinedController.signal,
   };
 
-  // Attach body for non-GET requests
-  if (config.method !== 'GET' && resolvedBody) {
-    fetchOptions.body = resolvedBody;
-  }
-
-  // Handle redirect policy
-  if (!config.followRedirects) {
-    fetchOptions.redirect = 'manual';
-  }
-
-  const startTime = performance.now();
-
   try {
-    let response: Response;
-    try {
-      response = await fetch(resolvedUrl, fetchOptions);
-    } catch (error: unknown) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        if (context.isAborted()) {
-          throw new Error('HTTP request cancelled: workflow execution was aborted');
-        }
-        throw new Error(
-          `HTTP request timed out after ${timeoutMs}ms for ${config.method} ${resolvedUrl}`,
-        );
-      }
-
-      if (error instanceof TypeError) {
-        throw new Error(
-          `HTTP request failed: network error for ${config.method} ${resolvedUrl} — ${error.message}`,
-        );
-      }
-
-      throw new Error(
-        `HTTP request failed for ${config.method} ${resolvedUrl}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-
-    const duration = performance.now() - startTime;
-
-    // Parse response headers into a plain object
-    const responseHeaders: Record<string, string> = {};
-    response.headers.forEach((value, key) => {
-      responseHeaders[key] = value;
-    });
-
-    // Parse response body — try JSON first, fall back to text
-    let body: unknown;
-    const contentType = response.headers.get('content-type') ?? '';
-
-    try {
-      if (contentType.includes('application/json')) {
-        body = await response.json();
-      } else {
-        const text = await response.text();
-        // Attempt JSON parse on text responses that might be JSON
-        try {
-          body = JSON.parse(text);
-        } catch {
-          body = text;
-        }
-      }
-    } catch {
-      body = null;
-    }
-
-    return {
-      status: response.status,
-      statusText: response.statusText,
-      headers: responseHeaders,
-      body,
-      duration: Math.round(duration),
-    };
-  } finally {
-    clearTimeout(timeoutId);
-    context.signal.removeEventListener('abort', onContextAbort);
+    return await withRetry(
+      doFetch,
+      config.retry,
+      (error) => isRetryableHttpError(error) || isHttpResultError(error),
+      undefined,
+      () => context.isAborted(),
+    );
+  } catch (error: unknown) {
+    // If the last retry still got a response, return it instead of throwing
+    if (isHttpResultError(error)) return error.result;
+    throw error;
   }
 }

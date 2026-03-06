@@ -1,6 +1,7 @@
 import type { CodeConfig, WorkflowEdge } from '../../types';
 import type { ExecutionContext } from '../ExecutionContext';
 import { getDirectParents } from '../graphUtils';
+import { withRetry } from '../retry';
 
 export interface CodeRunnerResult {
   returned: unknown;
@@ -270,33 +271,43 @@ export async function runCode(
   // Timeout for code execution (10 seconds)
   const CODE_TIMEOUT = 10_000;
 
-  try {
-    // Prefer Web Worker for safe termination of infinite loops
-    if (typeof Worker !== 'undefined' && typeof Blob !== 'undefined') {
-      const { returned, logs } = await runInWorker(
+  const executeCode = async (): Promise<CodeRunnerResult> => {
+    try {
+      // Prefer Web Worker for safe termination of infinite loops
+      if (typeof Worker !== 'undefined' && typeof Blob !== 'undefined') {
+        const { returned, logs } = await runInWorker(
+          config.code,
+          input,
+          variables,
+          CODE_TIMEOUT,
+          context.signal,
+        );
+        return { returned, logs };
+      }
+
+      // Fallback: main-thread execution (cannot kill sync infinite loops)
+      const logs: string[] = [];
+      const result = await runOnMainThread(
         config.code,
         input,
         variables,
+        logs,
         CODE_TIMEOUT,
         context.signal,
       );
-      return { returned, logs };
+      return { returned: result, logs };
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : String(error);
+      throw new Error(`Code execution failed: ${message}`);
     }
+  };
 
-    // Fallback: main-thread execution (cannot kill sync infinite loops)
-    const logs: string[] = [];
-    const result = await runOnMainThread(
-      config.code,
-      input,
-      variables,
-      logs,
-      CODE_TIMEOUT,
-      context.signal,
-    );
-    return { returned: result, logs };
-  } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
-    throw new Error(`Code execution failed: ${message}`);
-  }
+  return withRetry(
+    executeCode,
+    config.retry,
+    () => true, // All errors are retryable for code nodes (user configures this)
+    undefined,
+    () => context.isAborted(),
+  );
 }

@@ -1,9 +1,10 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { redis, workflowDataKey, execRunKey, execIndexKey, EXEC_RUN_TTL, MAX_RUNS_PER_WORKFLOW } from '../_lib/redis.js';
+import { redis, workflowDataKey, workflowOwnerKey, execRunKey, execIndexKey, EXEC_RUN_TTL, MAX_RUNS_PER_WORKFLOW } from '../_lib/redis.js';
 import { isValidId } from '../_lib/validation.js';
 import type { Workflow } from '../_lib/types.js';
 import type { ServerWorkflowNode, ServerWorkflowEdge } from '../_lib/engine/types.js';
 import { ServerWorkflowExecutor } from '../_lib/engine/executor.js';
+import { verifyQStashSignature } from '../_lib/qstash.js';
 
 /**
  * ALL /api/webhooks/:workflowId — Webhook receiver
@@ -24,9 +25,76 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: { message: 'Invalid workflow ID format', code: 'VALIDATION_ERROR' } });
   }
 
+  // FIX 2: Mandatory authentication — QStash signature OR webhook secret
+  let authenticated = false;
+
+  // Method 1: Verify QStash signature if present
+  const qstashSignature = req.headers['upstash-signature'];
+  if (qstashSignature) {
+    const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? {});
+    const protocol = req.headers['x-forwarded-proto'] ?? 'https';
+    const host = req.headers['host'] ?? '';
+    const requestUrl = `${protocol}://${host}${req.url}`;
+    const isValid = await verifyQStashSignature(
+      Array.isArray(qstashSignature) ? qstashSignature[0] : qstashSignature,
+      rawBody,
+      requestUrl,
+    );
+    if (!isValid) {
+      return res.status(401).json({ error: { message: 'Invalid QStash signature', code: 'UNAUTHORIZED' } });
+    }
+    authenticated = true;
+  }
+
+  // Method 2: Check x-webhook-secret header against per-workflow secret
+  if (!authenticated) {
+    const webhookSecret = req.headers['x-webhook-secret'] as string | undefined;
+    if (webhookSecret) {
+      // Look up workflow to check webhookSecret — we'll do a lightweight check here
+      const userId = await redis.get<string>(workflowOwnerKey(workflowId));
+      if (userId) {
+        const raw = await redis.get<string>(workflowDataKey(userId, workflowId));
+        if (raw) {
+          const workflowData = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          if (workflowData.webhookSecret && webhookSecret === workflowData.webhookSecret) {
+            authenticated = true;
+          }
+        }
+      }
+    }
+  }
+
+  if (!authenticated) {
+    return res.status(401).json({ error: { message: 'Unauthorized: provide upstash-signature or x-webhook-secret header', code: 'UNAUTHORIZED' } });
+  }
+
+  // Rate limit: 30 requests per 60 seconds per IP — atomic pattern
+  const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ?? req.socket?.remoteAddress ?? 'unknown';
+  const rateLimitKey = `vwb:ratelimit:webhook:${ip}`;
   try {
+    const wasSet = await redis.set(rateLimitKey, 1, { ex: 60, nx: true });
+    let count: number;
+    if (wasSet) {
+      count = 1;
+    } else {
+      count = await redis.incr(rateLimitKey);
+    }
+    if (count > 30) {
+      return res.status(429).json({ error: { message: 'Too many requests', code: 'RATE_LIMITED' } });
+    }
+  } catch {
+    // Continue on rate limit check failure
+  }
+
+  try {
+    // Look up the workflow owner
+    const userId = await redis.get<string>(workflowOwnerKey(workflowId));
+    if (!userId) {
+      return res.status(404).json({ error: { message: 'Workflow not found', code: 'NOT_FOUND' } });
+    }
+
     // Fetch workflow from Redis
-    const raw = await redis.get<string>(workflowDataKey(workflowId));
+    const raw = await redis.get<string>(workflowDataKey(userId, workflowId));
     if (raw === null) {
       // L2: Don't include ID in error response
       return res.status(404).json({ error: { message: 'Workflow not found', code: 'NOT_FOUND' } });
@@ -38,22 +106,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const nodes = workflowData.nodes as ServerWorkflowNode[];
     const edges = workflowData.edges as ServerWorkflowEdge[];
 
-    // Verify the workflow has a webhook trigger node
+    // Verify the workflow has a webhook trigger or schedule trigger node
     const webhookNode = nodes.find((n) => n.data.type === 'webhookTrigger');
-    if (!webhookNode) {
+    const scheduleNode = nodes.find((n) => n.data.type === 'scheduleTrigger');
+    if (!webhookNode && !scheduleNode) {
       return res.status(400).json({
-        error: { message: 'Workflow does not have a webhook trigger node', code: 'NO_WEBHOOK_TRIGGER' },
+        error: { message: 'Workflow does not have a webhook or schedule trigger node', code: 'NO_TRIGGER' },
       });
     }
 
     // Build trigger data from the incoming request
+    // FIX 2: Strip sensitive headers before passing to the engine
+    const SENSITIVE_HEADER_PREFIXES = ['x-vercel-', 'x-forwarded-', 'upstash-'];
+    const SENSITIVE_HEADERS = new Set(['authorization', 'cookie', 'x-webhook-secret']);
+    const sanitizedHeaders: Record<string, string> = {};
+    for (const [key, value] of Object.entries(req.headers as Record<string, string>)) {
+      const lowerKey = key.toLowerCase();
+      if (SENSITIVE_HEADERS.has(lowerKey)) continue;
+      if (SENSITIVE_HEADER_PREFIXES.some(prefix => lowerKey.startsWith(prefix))) continue;
+      sanitizedHeaders[key] = value;
+    }
+
     const triggerData: Record<string, unknown> = {
       method: req.method,
       path: req.url,
-      headers: { ...(req.headers as Record<string, string>) },
+      headers: sanitizedHeaders,
       body: req.body ?? {},
       query: req.query,
       timestamp: new Date().toISOString(),
+      source: qstashSignature ? 'schedule' : 'webhook',
     };
 
     const serverWorkflow = {
@@ -66,6 +147,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Execute the workflow
     const executor = new ServerWorkflowExecutor();
+    executor.setUserId(userId);
     const run = await executor.execute(serverWorkflow, triggerData);
 
     // Store result in Redis

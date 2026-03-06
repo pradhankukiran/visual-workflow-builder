@@ -7,7 +7,7 @@ import type {
   NodeExecutionResult,
 } from '../types';
 import { ExecutionContext } from './ExecutionContext';
-import { topologicalSort, getConditionalBranches } from './graphUtils';
+import { topologicalSort, getConditionalBranches, getErrorBranchTargets, getNormalDownstream } from './graphUtils';
 import { runNode } from './NodeRunner';
 import { generateExecutionId, generateLogId } from '../utils/idGenerator';
 import { now } from '../utils/dateUtils';
@@ -25,6 +25,7 @@ export class WorkflowExecutor {
   private context!: ExecutionContext;
   private abortController!: AbortController;
   private callbacks: ExecutionCallbacks;
+  private _wrappedOnLog?: (log: ExecutionRun['logs'][number]) => void;
 
   constructor(callbacks: Partial<ExecutionCallbacks>) {
     this.callbacks = {
@@ -63,17 +64,17 @@ export class WorkflowExecutor {
     };
 
     // M17: Wrap onLog to also push to run.logs[] (matching server pattern)
-    const originalOnLog = this.callbacks.onLog;
-    this.callbacks.onLog = (log) => {
+    // Use a local variable to avoid mutating this.callbacks.onLog (stale closure on re-entrant calls)
+    const wrappedOnLog = (log: ExecutionRun['logs'][number]) => {
       run.logs.push(log);
-      originalOnLog(log);
+      this.callbacks.onLog(log);
     };
+    this._wrappedOnLog = wrappedOnLog;
 
     try {
       return await this._executeInner(workflow, run);
     } finally {
-      // Restore original onLog
-      this.callbacks.onLog = originalOnLog;
+      this._wrappedOnLog = undefined;
     }
   }
 
@@ -144,6 +145,7 @@ export class WorkflowExecutor {
         };
 
         run.nodeStatuses[nodeId] = skipResult;
+        this.callbacks.onNodeStart(nodeId);
         this.callbacks.onNodeComplete(nodeId, skipResult);
         continue;
       }
@@ -187,6 +189,17 @@ export class WorkflowExecutor {
         run.nodeStatuses[nodeId] = completeResult;
         this.callbacks.onNodeComplete(nodeId, completeResult);
 
+        // Skip error-branch targets (and their transitive downstream) on success
+        const errorTargets = getErrorBranchTargets(nodeId, workflow.edges);
+        for (const target of errorTargets) {
+          skippedNodes.add(target);
+        }
+        for (const target of errorTargets) {
+          for (const downstream of getNormalDownstream(target, workflow.edges)) {
+            skippedNodes.add(downstream);
+          }
+        }
+
         // Handle conditional branching
         if (node.data.type === 'conditionalBranch' && output !== null && typeof output === 'object') {
           const condResult = (output as { result?: boolean }).result;
@@ -216,6 +229,39 @@ export class WorkflowExecutor {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
 
+        // Check for error branch edges
+        const errorTargets = getErrorBranchTargets(nodeId, workflow.edges);
+
+        if (errorTargets.length > 0) {
+          // Node has error edges — follow error path instead of failing
+          const errorOutput = {
+            error: { message: errorMessage, nodeId, nodeType: node.data.type },
+          };
+          this.context.setNodeOutput(nodeId, errorOutput);
+
+          // Mark node as failed but don't stop workflow
+          run.nodeStatuses[nodeId] = {
+            nodeId,
+            status: 'failed',
+            error: errorMessage,
+            startedAt: nodeStartedAt,
+            completedAt: now(),
+            duration,
+          };
+
+          this.callbacks.onNodeError(nodeId, errorMessage);
+          this.log('info', `Node "${node.data.label}" failed, following error branch`, nodeId);
+
+          // Skip all NORMAL downstream nodes (error branch will still execute)
+          const normalDownstream = getNormalDownstream(nodeId, workflow.edges);
+          for (const skipId of normalDownstream) {
+            skippedNodes.add(skipId);
+          }
+
+          continue; // Don't stop the workflow
+        }
+
+        // No error edges — existing behavior (fail the workflow)
         const failResult: NodeExecutionResult = {
           nodeId,
           status: 'failed',
@@ -265,7 +311,7 @@ export class WorkflowExecutor {
    * Cancel the running workflow execution.
    */
   cancel(): void {
-    this.abortController.abort();
+    this.abortController?.abort();
   }
 
   /**
@@ -276,12 +322,14 @@ export class WorkflowExecutor {
     message: string,
     data?: unknown,
   ): void {
-    this.callbacks.onLog({
+    const logEntry = {
       id: generateLogId(),
       timestamp: now(),
       level,
       message,
       data,
-    });
+    };
+    const onLog = this._wrappedOnLog ?? this.callbacks.onLog;
+    onLog(logEntry);
   }
 }

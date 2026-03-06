@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { redis, proxyRateKey } from './_lib/redis.js';
 import { isPrivateUrl, isPrivateRedirectTarget } from './_lib/ssrf.js';
+import { authenticate, AuthError } from './_lib/auth.js';
 
 const RATE_LIMIT_MAX = 100;
 const RATE_LIMIT_WINDOW = 60; // seconds
@@ -28,8 +29,9 @@ function isAllowedOrigin(req: VercelRequest): boolean {
     // Allow if origin matches the host
     if (originUrl.host === host) return true;
 
-    // Allow Vercel preview/production deployments (strict suffix check)
-    if (originHostname.endsWith('.vercel.app')) return true;
+    // Allow Vercel production/preview deployment (exact match)
+    const allowedHost = process.env.VERCEL_PROJECT_PRODUCTION_URL ?? process.env.VERCEL_URL;
+    if (allowedHost && originHostname === allowedHost) return true;
   } catch {
     // Invalid origin URL — reject
     return false;
@@ -39,11 +41,17 @@ function isAllowedOrigin(req: VercelRequest): boolean {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Handle CORS preflight — always allowed so the browser can proceed
+  // FIX 8: Check origin BEFORE handling preflight so disallowed origins are rejected
+  if (!isAllowedOrigin(req)) {
+    return res.status(403).json({ error: { message: 'Forbidden origin', code: 'FORBIDDEN_ORIGIN' } });
+  }
+
+  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', req.headers.origin ?? '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Client-Source');
+    res.setHeader('Vary', 'Origin');
     return res.status(204).end();
   }
 
@@ -51,15 +59,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: { message: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' } });
   }
 
-  // Origin check — reject before setting permissive CORS headers
-  if (!isAllowedOrigin(req)) {
-    return res.status(403).json({ error: { message: 'Forbidden origin', code: 'FORBIDDEN_ORIGIN' } });
+  try {
+    await authenticate(req);
+  } catch (err) {
+    if (err instanceof AuthError) {
+      return res.status(401).json({ error: { message: 'Unauthorized', code: 'UNAUTHORIZED' } });
+    }
+    return res.status(500).json({ error: { message: 'Internal server error', code: 'INTERNAL_ERROR' } });
   }
 
   // Origin validated — set CORS headers for the actual response
   res.setHeader('Access-Control-Allow-Origin', req.headers.origin ?? '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Client-Source');
+  res.setHeader('Vary', 'Origin');
 
   try {
     // M1: Atomic rate limiting — use SET NX EX for atomic TTL, then INCR
@@ -135,9 +148,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
       }
 
-      // M8: Check response size before reading body
+      // M8: Check response size before reading body — abort early to avoid buffering
       const contentLength = response.headers.get('content-length');
       if (contentLength && parseInt(contentLength, 10) > MAX_RESPONSE_SIZE) {
+        controller.abort();
         return res.status(502).json({
           error: { message: 'Response too large (exceeds 5MB limit)', code: 'RESPONSE_TOO_LARGE' },
         });

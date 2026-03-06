@@ -66,7 +66,7 @@ export async function runLoop(
   context: ExecutionContext,
 ): Promise<LoopRunnerResult> {
   const results: unknown[] = [];
-  const maxIter = Math.max(1, config.maxIterations);
+  const maxIter = Math.min(Math.max(1, config.maxIterations), 10_000);
 
   // Mode 1: iterate over an array
   if (config.loopOver) {

@@ -15,7 +15,9 @@ export type NodeType =
   | 'webhookTrigger'
   | 'scheduleTrigger'
   | 'variableSet'
-  | 'variableGet';
+  | 'variableGet'
+  | 'llm'
+  | 'email';
 
 /**
  * HTTP methods supported by the HTTP Request node.
@@ -54,6 +56,15 @@ export interface BranchCondition {
   logicalOp: LogicalOperator;
 }
 
+// ─── Retry Config ────────────────────────────────────────────────────────────
+
+export interface RetryConfig {
+  enabled: boolean;
+  maxRetries: number;
+  initialDelayMs: number;
+  backoffMultiplier: number;
+}
+
 // ─── Per-Type Config Interfaces ──────────────────────────────────────────────
 
 export interface HttpRequestConfig {
@@ -63,6 +74,7 @@ export interface HttpRequestConfig {
   body: string;
   timeout: number;
   followRedirects: boolean;
+  retry?: RetryConfig;
 }
 
 export interface JsonTransformConfig {
@@ -94,6 +106,7 @@ export interface MergeConfig {
 export interface CodeConfig {
   code: string;
   language: 'javascript';
+  retry?: RetryConfig;
 }
 
 export interface ConsoleOutputConfig {
@@ -105,6 +118,13 @@ export interface WebhookTriggerConfig {
   path: string;
   method: HttpMethod;
   headers: Record<string, string>;
+  /** Test data used during client-side "Run in Browser" execution */
+  testData?: {
+    method?: HttpMethod;
+    headers?: Record<string, string>;
+    body?: string;  // JSON string
+    queryParams?: Record<string, string>;
+  };
 }
 
 export interface ScheduleTriggerConfig {
@@ -123,6 +143,29 @@ export interface VariableGetConfig {
   defaultValue?: string;
 }
 
+export type LlmProvider = 'anthropic' | 'openai';
+
+export interface LlmConfig {
+  provider: LlmProvider;
+  model: string;
+  systemPrompt: string;
+  userPrompt: string;
+  temperature: number;
+  maxTokens: number;
+  apiKey: string;
+  credentialId?: string;
+}
+
+export interface EmailConfig {
+  to: string;
+  from: string;
+  subject: string;
+  body: string;
+  bodyType: 'text' | 'html';
+  apiKey: string;
+  credentialId?: string;
+}
+
 // ─── Union of All Config Types ───────────────────────────────────────────────
 
 export type NodeConfig =
@@ -137,7 +180,9 @@ export type NodeConfig =
   | WebhookTriggerConfig
   | ScheduleTriggerConfig
   | VariableSetConfig
-  | VariableGetConfig;
+  | VariableGetConfig
+  | LlmConfig
+  | EmailConfig;
 
 // ─── Workflow Node Data ──────────────────────────────────────────────────────
 

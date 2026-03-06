@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { redis, workflowDataKey, execRunKey, execIndexKey, execRateKey, EXEC_RUN_TTL, MAX_RUNS_PER_WORKFLOW } from '../_lib/redis.js';
+import { redis, workflowDataKey, workflowOwnerKey, execRunKey, execIndexKey, execRateKey, EXEC_RUN_TTL, MAX_RUNS_PER_WORKFLOW } from '../_lib/redis.js';
 import { isValidId } from '../_lib/validation.js';
+import { authenticate, AuthError } from '../_lib/auth.js';
 import type { Workflow } from '../_lib/types.js';
 import type { ServerWorkflowNode, ServerWorkflowEdge, ExecutionRun, ExecutionRunSummary } from '../_lib/engine/types.js';
 import { ServerWorkflowExecutor } from '../_lib/engine/executor.js';
@@ -14,11 +15,22 @@ const EXEC_RATE_LIMIT_WINDOW = 60; // seconds
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
+    let userId: string;
+    try {
+      const auth = await authenticate(req);
+      userId = auth.userId;
+    } catch (err) {
+      if (err instanceof AuthError) {
+        return res.status(401).json({ error: { message: 'Unauthorized', code: 'UNAUTHORIZED' } });
+      }
+      throw err;
+    }
+
     if (req.method === 'POST') {
-      return await handlePost(req, res);
+      return await handlePost(userId, req, res);
     }
     if (req.method === 'GET') {
-      return await handleGet(req, res);
+      return await handleGet(userId, req, res);
     }
     res.setHeader('Allow', 'GET, POST');
     return res.status(405).json({ error: { message: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' } });
@@ -29,8 +41,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 }
 
-async function handlePost(req: VercelRequest, res: VercelResponse) {
-  const { workflowId, triggerData } = req.body ?? {};
+async function handlePost(userId: string, req: VercelRequest, res: VercelResponse) {
+  const { workflowId, triggerData, mode = 'quick' } = req.body ?? {};
 
   if (!workflowId || typeof workflowId !== 'string') {
     return res.status(400).json({ error: { message: 'Missing required field: workflowId', code: 'VALIDATION_ERROR' } });
@@ -60,7 +72,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
   }
 
   // Fetch workflow from Redis
-  const raw = await redis.get<string>(workflowDataKey(workflowId));
+  const raw = await redis.get<string>(workflowDataKey(userId, workflowId));
   if (raw === null) {
     // L2: Don't include ID in error response
     return res.status(404).json({ error: { message: 'Workflow not found', code: 'NOT_FOUND' } });
@@ -68,6 +80,36 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
 
   const workflowData: Workflow = typeof raw === 'string' ? JSON.parse(raw) : raw;
 
+  // Durable mode: trigger Upstash Workflow for long-running execution
+  if (mode === 'durable') {
+    const { generateId } = await import('../_lib/engine/utils.js');
+    const runId = generateId('exec');
+    const run: ExecutionRun = {
+      id: runId,
+      workflowId,
+      status: 'running',
+      startedAt: new Date().toISOString(),
+      nodeStatuses: {},
+      logs: [],
+    };
+    await redis.set(execRunKey(runId), JSON.stringify(run), { ex: EXEC_RUN_TTL });
+    await redis.zadd(execIndexKey(workflowId), { score: Date.now(), member: runId });
+
+    // Trigger the durable workflow via QStash
+    const baseUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL || 'localhost:3000';
+    const protocol = baseUrl.includes('localhost') ? 'http' : 'https';
+
+    const { Client } = await import('@upstash/qstash');
+    const qstash = new Client({ token: process.env.QSTASH_TOKEN! });
+    await qstash.publishJSON({
+      url: `${protocol}://${baseUrl}/api/workflow-run/${workflowId}`,
+      body: { workflowId, runId, userId, triggerData },
+    });
+
+    return res.status(202).json({ data: run });
+  }
+
+  // Quick mode (default): execute synchronously within the request
   // Cast to server engine shapes
   const serverWorkflow = {
     id: workflowData.id,
@@ -79,6 +121,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
 
   // Execute on server
   const executor = new ServerWorkflowExecutor();
+  executor.setUserId(userId);
   const run = await executor.execute(serverWorkflow, triggerData);
 
   // Store result in Redis
@@ -91,7 +134,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
   return res.status(200).json({ data: run });
 }
 
-async function handleGet(req: VercelRequest, res: VercelResponse) {
+async function handleGet(userId: string, req: VercelRequest, res: VercelResponse) {
   const { workflowId } = req.query;
 
   if (typeof workflowId !== 'string') {
@@ -101,6 +144,16 @@ async function handleGet(req: VercelRequest, res: VercelResponse) {
   // M4: Validate workflowId format
   if (!isValidId(workflowId)) {
     return res.status(400).json({ error: { message: 'Invalid workflow ID format', code: 'VALIDATION_ERROR' } });
+  }
+
+  // Ownership check: verify the authenticated user owns this workflow
+  const owner = await redis.get<string>(workflowOwnerKey(workflowId));
+  // FIX 12: Return 404 when workflow doesn't exist (owner is null), 403 for wrong owner
+  if (!owner) {
+    return res.status(404).json({ error: { message: 'Workflow not found', code: 'NOT_FOUND' } });
+  }
+  if (owner !== userId) {
+    return res.status(403).json({ error: { message: 'Forbidden', code: 'FORBIDDEN' } });
   }
 
   // Get latest 20 run IDs (most recent first)

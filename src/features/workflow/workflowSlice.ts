@@ -158,12 +158,20 @@ const workflowSlice = createSlice({
     /** Handle a new connection between two nodes. */
     onConnect(state, action: PayloadAction<Connection>) {
       const connection = action.payload;
+      const isErrorEdge = connection.sourceHandle === 'error';
       const newEdge: WorkflowEdge = {
-        id: generateEdgeId(),
+        id: isErrorEdge
+          ? `edge-${connection.source}-${connection.target}-error`
+          : generateEdgeId(),
         source: connection.source,
         target: connection.target,
         sourceHandle: connection.sourceHandle ?? undefined,
         targetHandle: connection.targetHandle ?? undefined,
+        ...(isErrorEdge && {
+          data: { edgeType: 'error' as const },
+          style: { stroke: '#ef4444', strokeDasharray: '5,5' },
+          animated: true,
+        }),
       };
       state.edges.push(newEdge);
       state.isDirty = true;
@@ -230,6 +238,25 @@ const workflowSlice = createSlice({
     markDirty(state) {
       state.isDirty = true;
     },
+
+    /** Atomically apply an undo/redo snapshot without triggering auto-save. */
+    loadSnapshot(
+      state,
+      action: PayloadAction<{
+        nodes: WorkflowNode[];
+        edges: WorkflowEdge[];
+        viewport: { x: number; y: number; zoom: number };
+        name: string;
+        description: string;
+      }>,
+    ) {
+      const { nodes, edges, viewport, name, description } = action.payload;
+      state.nodes = nodes;
+      state.edges = edges;
+      state.viewport = viewport;
+      state.name = name;
+      state.description = description;
+    },
   },
   extraReducers: (builder) => {
     // Handle the cross-slice resetApp action
@@ -270,6 +297,8 @@ const workflowSlice = createSlice({
       workflowLibraryApi.endpoints.saveWorkflow.matchFulfilled,
       (state, action) => {
         state.isSyncing = false;
+        state.isDirty = false;
+        state.lastSavedAt = action.payload.updatedAt;
         state.lastSyncedAt = action.payload.updatedAt;
         state.syncError = undefined;
       },
@@ -304,6 +333,7 @@ export const {
   newWorkflow,
   markSaved,
   markDirty,
+  loadSnapshot,
 } = workflowSlice.actions;
 
 export default workflowSlice.reducer;

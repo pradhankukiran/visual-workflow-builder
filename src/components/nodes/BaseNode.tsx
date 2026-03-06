@@ -34,12 +34,28 @@ function BaseNodeInner({ id, data, children }: BaseNodeProps) {
 
   const isSelected = selectedNodeId === id;
   const definition = NODE_DEFINITIONS[data.type];
+
+  if (!definition) {
+    return (
+      <div
+        className={clsx(
+          'workflow-node workflow-node--error',
+          'px-3 py-2 rounded-lg border border-[var(--color-error)]',
+          'bg-[color-mix(in_srgb,var(--color-error)_10%,var(--color-surface))]',
+          'text-xs text-[var(--color-error)]',
+        )}
+      >
+        Unknown node type: {data.type}
+      </div>
+    );
+  }
+
   const category: NodeCategory = definition.category;
   const isTrigger = TRIGGER_TYPES.has(data.type);
   const isTerminal = TERMINAL_TYPES.has(data.type);
   const executionStatus = executionResult?.status;
   const hasValidationErrors =
-    !data.isValid && data.validationErrors.length > 0;
+    !data.isValid && data.validationErrors?.length > 0;
 
   // Map NodeExecutionStatus to CSS class suffixes and StatusBadge values
   const statusClass = (() => {
@@ -99,7 +115,7 @@ function BaseNodeInner({ id, data, children }: BaseNodeProps) {
                   'color-mix(in srgb, var(--color-error) 15%, transparent)',
                 color: 'var(--color-error)',
               }}
-              title={data.validationErrors.join(', ')}
+              title={data.validationErrors?.join(', ')}
               aria-label="Validation errors"
             >
               !
@@ -126,6 +142,21 @@ function BaseNodeInner({ id, data, children }: BaseNodeProps) {
           position={Position.Right}
           id="source"
           className="!opacity-100"
+        />
+      )}
+      {/* Error output handle */}
+      {!isTerminal && (
+        <Handle
+          type="source"
+          position={Position.Right}
+          id="error"
+          style={{
+            top: '75%',
+            width: 8,
+            height: 8,
+            background: 'var(--color-error, #ef4444)',
+            border: '2px solid var(--color-bg, #1a1a2e)',
+          }}
         />
       )}
     </div>

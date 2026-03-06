@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { useAppDispatch, useAppSelector } from '@/app/hooks';
 import { undo, redo, type WorkflowSnapshot } from '@/features/history/historyActions';
 import {
@@ -13,43 +13,7 @@ import {
   selectViewport,
   selectWorkflowMeta,
 } from '@/features/workflow/workflowSelectors';
-import { setNodes, setEdges, setViewport, setWorkflowMeta } from '@/features/workflow/workflowSlice';
-
-/**
- * Build a snapshot of the current workflow state.
- */
-function useCurrentSnapshot(): WorkflowSnapshot {
-  const nodes = useAppSelector(selectAllNodes);
-  const edges = useAppSelector(selectAllEdges);
-  const viewport = useAppSelector(selectViewport);
-  const meta = useAppSelector(selectWorkflowMeta);
-
-  return {
-    nodes,
-    edges,
-    viewport,
-    name: meta.name,
-    description: meta.description,
-  };
-}
-
-/**
- * Apply a snapshot to the workflow slice.
- */
-function applySnapshot(
-  dispatch: ReturnType<typeof useAppDispatch>,
-  snapshot: WorkflowSnapshot,
-) {
-  dispatch(setNodes(snapshot.nodes));
-  dispatch(setEdges(snapshot.edges));
-  dispatch(setViewport(snapshot.viewport));
-  dispatch(
-    setWorkflowMeta({
-      name: snapshot.name,
-      description: snapshot.description,
-    }),
-  );
-}
+import { loadSnapshot } from '@/features/workflow/workflowSlice';
 
 /**
  * Custom hook for undo/redo workflow state management.
@@ -71,33 +35,76 @@ export function useUndoRedo() {
   const canRedo = useAppSelector(selectCanRedo);
   const lastSnapshot = useAppSelector(selectLastSnapshot);
   const nextSnapshot = useAppSelector(selectNextSnapshot);
-  const currentSnapshot = useCurrentSnapshot();
+
+  // Use refs to always read the latest state when undo/redo is called,
+  // avoiding new object creation every render that would invalidate useCallback.
+  const nodes = useAppSelector(selectAllNodes);
+  const edges = useAppSelector(selectAllEdges);
+  const viewport = useAppSelector(selectViewport);
+  const meta = useAppSelector(selectWorkflowMeta);
+
+  const nodesRef = useRef(nodes);
+  const edgesRef = useRef(edges);
+  const viewportRef = useRef(viewport);
+  const metaRef = useRef(meta);
+  nodesRef.current = nodes;
+  edgesRef.current = edges;
+  viewportRef.current = viewport;
+  metaRef.current = meta;
+
+  // Keep refs for history state to avoid stale closures on rapid undo/redo
+  const canUndoRef = useRef(canUndo);
+  const canRedoRef = useRef(canRedo);
+  const lastSnapshotRef = useRef(lastSnapshot);
+  const nextSnapshotRef = useRef(nextSnapshot);
+  canUndoRef.current = canUndo;
+  canRedoRef.current = canRedo;
+  lastSnapshotRef.current = lastSnapshot;
+  nextSnapshotRef.current = nextSnapshot;
 
   const handleUndo = useCallback(() => {
-    if (!canUndo || !lastSnapshot) return;
+    if (!canUndoRef.current || !lastSnapshotRef.current) return;
 
     // Read the target snapshot before dispatch pops it from the stack.
-    const target = lastSnapshot;
+    const target = lastSnapshotRef.current;
+
+    // Build current snapshot from refs (always fresh, no stale closures).
+    const current: WorkflowSnapshot = {
+      nodes: nodesRef.current,
+      edges: edgesRef.current,
+      viewport: viewportRef.current,
+      name: metaRef.current.name,
+      description: metaRef.current.description,
+    };
 
     // Dispatch undo with the current state so it's saved to the redo stack.
-    dispatch(undo(currentSnapshot));
+    dispatch(undo(current));
 
-    // Restore the workflow to the target (previous) state.
-    applySnapshot(dispatch, target);
-  }, [dispatch, canUndo, lastSnapshot, currentSnapshot]);
+    // Restore the workflow to the target (previous) state atomically.
+    dispatch(loadSnapshot(target));
+  }, [dispatch]);
 
   const handleRedo = useCallback(() => {
-    if (!canRedo || !nextSnapshot) return;
+    if (!canRedoRef.current || !nextSnapshotRef.current) return;
 
     // Read the target snapshot before dispatch pops it from the stack.
-    const target = nextSnapshot;
+    const target = nextSnapshotRef.current;
+
+    // Build current snapshot from refs (always fresh, no stale closures).
+    const current: WorkflowSnapshot = {
+      nodes: nodesRef.current,
+      edges: edgesRef.current,
+      viewport: viewportRef.current,
+      name: metaRef.current.name,
+      description: metaRef.current.description,
+    };
 
     // Dispatch redo with the current state so it's saved to the undo stack.
-    dispatch(redo(currentSnapshot));
+    dispatch(redo(current));
 
-    // Restore the workflow to the target (next) state.
-    applySnapshot(dispatch, target);
-  }, [dispatch, canRedo, nextSnapshot, currentSnapshot]);
+    // Restore the workflow to the target (next) state atomically.
+    dispatch(loadSnapshot(target));
+  }, [dispatch]);
 
   return {
     canUndo,

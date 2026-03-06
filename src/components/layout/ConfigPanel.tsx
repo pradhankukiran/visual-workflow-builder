@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState, Suspense } from 'react';
 import clsx from 'clsx';
 import type { LucideIcon } from 'lucide-react';
-import { Play, Zap, GitBranch, Monitor, Braces } from 'lucide-react';
+import { Play, Zap, GitBranch, Monitor, Braces, Sparkles } from 'lucide-react';
 import { useAppSelector, useAppDispatch } from '@/app/hooks';
 import { removeNode, addNode } from '@/features/workflow/workflowSlice';
+import { selectNodeById } from '@/features/workflow/workflowSelectors';
 import { deselectNode } from '@/features/ui/uiSlice';
 import { NODE_DEFINITIONS, type NodeCategory } from '@/constants/nodeDefinitions';
 import { generateNodeId } from '@/utils/idGenerator';
@@ -22,6 +23,7 @@ const CATEGORY_META: Record<NodeCategory, { label: string; color: string; icon: 
   logic: { label: 'Logic', color: 'var(--color-node-logic)', icon: GitBranch },
   output: { label: 'Output', color: 'var(--color-node-output)', icon: Monitor },
   data: { label: 'Data', color: 'var(--color-node-data)', icon: Braces },
+  ai: { label: 'AI', color: '#A855F7', icon: Sparkles },
 };
 
 function getNodeDef(nodeType: string) {
@@ -30,14 +32,12 @@ function getNodeDef(nodeType: string) {
 
 export default function ConfigPanel({ selectedNodeId }: ConfigPanelProps) {
   const dispatch = useAppDispatch();
-  const nodes = useAppSelector((state) => state.workflow.nodes);
+  const selectedNode = useAppSelector((state) =>
+    selectedNodeId ? selectNodeById(state, selectedNodeId) : undefined,
+  );
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [isClosing, setIsClosing] = useState(false);
   const [visible, setVisible] = useState(false);
-
-  const selectedNode: WorkflowNode | undefined = selectedNodeId
-    ? nodes.find((n) => n.id === selectedNodeId)
-    : undefined;
 
   // Animate open/close
   useEffect(() => {

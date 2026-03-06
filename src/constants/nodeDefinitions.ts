@@ -12,6 +12,8 @@ import {
   Clock,
   Download,
   Upload,
+  Sparkles,
+  Mail,
 } from 'lucide-react';
 import type {
   NodeType,
@@ -28,12 +30,14 @@ import type {
   ScheduleTriggerConfig,
   VariableSetConfig,
   VariableGetConfig,
+  LlmConfig,
+  EmailConfig,
 } from '../types';
 
 /**
  * Category grouping for the node palette sidebar.
  */
-export type NodeCategory = 'trigger' | 'action' | 'logic' | 'output' | 'data';
+export type NodeCategory = 'trigger' | 'action' | 'logic' | 'output' | 'data' | 'ai';
 
 /**
  * Complete definition of a node type including UI metadata and default config.
@@ -116,6 +120,25 @@ const defaultVariableSetConfig: VariableSetConfig = {
 
 const defaultVariableGetConfig: VariableGetConfig = {
   variableName: '',
+};
+
+const defaultEmailConfig: EmailConfig = {
+  to: '',
+  from: '',
+  subject: '',
+  body: '',
+  bodyType: 'text',
+  apiKey: '',
+};
+
+const defaultLlmConfig: LlmConfig = {
+  provider: 'anthropic',
+  model: 'claude-sonnet-4-20250514',
+  systemPrompt: '',
+  userPrompt: '',
+  temperature: 0.7,
+  maxTokens: 1024,
+  apiKey: '',
 };
 
 // ─── Node Definitions ────────────────────────────────────────────────────────
@@ -229,6 +252,24 @@ export const NODE_DEFINITIONS: Record<NodeType, NodeDefinition> = {
     color: '#22D3EE',
     defaultConfig: defaultVariableGetConfig,
   },
+  llm: {
+    type: 'llm',
+    label: 'LLM',
+    description: 'Call an AI language model',
+    icon: Sparkles,
+    category: 'ai',
+    color: '#A855F7',
+    defaultConfig: defaultLlmConfig,
+  },
+  email: {
+    type: 'email',
+    label: 'Email',
+    description: 'Send an email via Resend',
+    icon: Mail,
+    category: 'action',
+    color: '#3B82F6',
+    defaultConfig: defaultEmailConfig,
+  },
 };
 
 /**
@@ -246,5 +287,6 @@ export const NODE_CATEGORIES: Record<NodeCategory, NodeDefinition[]> =
       logic: [] as NodeDefinition[],
       output: [] as NodeDefinition[],
       data: [] as NodeDefinition[],
+      ai: [] as NodeDefinition[],
     } as Record<NodeCategory, NodeDefinition[]>,
   );

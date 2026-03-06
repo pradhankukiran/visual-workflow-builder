@@ -7,6 +7,8 @@ import toastReducer from '../features/toast/toastSlice';
 import validationReducer from '../features/validation/validationSlice';
 import { workflowLibraryApi } from '../features/workflowLibrary/workflowLibraryApi';
 import { executionApi } from '../features/execution/executionApi';
+import { versionsApi } from '../features/versions/versionsApi';
+import { credentialsApi } from '../features/credentials/credentialsApi';
 
 /**
  * Root reducer combining all feature slice reducers.
@@ -24,6 +26,8 @@ const rootReducer = combineReducers({
   validation: validationReducer,
   [workflowLibraryApi.reducerPath]: workflowLibraryApi.reducer,
   [executionApi.reducerPath]: executionApi.reducer,
+  [versionsApi.reducerPath]: versionsApi.reducer,
+  [credentialsApi.reducerPath]: credentialsApi.reducer,
 });
 
 export type RootReducerState = ReturnType<typeof rootReducer>;

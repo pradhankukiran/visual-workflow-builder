@@ -1,5 +1,6 @@
-import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+import { createApi } from '@reduxjs/toolkit/query/react';
 import type { ExecutionRun } from '@/types';
+import { authBaseQuery } from '@/auth/authBaseQuery';
 
 /** Lightweight summary returned by the list endpoint. */
 export interface ExecutionRunSummary {
@@ -19,13 +20,7 @@ export interface ExecutionRunSummary {
  */
 export const executionApi = createApi({
   reducerPath: 'executionApi',
-  baseQuery: fetchBaseQuery({
-    baseUrl: '/api',
-    prepareHeaders: (headers) => {
-      headers.set('X-Client-Source', 'visual-workflow-builder');
-      return headers;
-    },
-  }),
+  baseQuery: authBaseQuery,
   tagTypes: ['Execution', 'ExecutionList'],
   endpoints: (builder) => ({
     /**
@@ -33,11 +28,11 @@ export const executionApi = createApi({
      */
     triggerExecution: builder.mutation<
       ExecutionRun,
-      { workflowId: string; triggerData?: Record<string, unknown> }
+      { workflowId: string; triggerData?: Record<string, unknown>; mode?: 'quick' | 'durable' }
     >({
       query: (body) => ({ url: '/executions', method: 'POST', body }),
       transformResponse: (response: { data: ExecutionRun }) => response.data,
-      invalidatesTags: ['ExecutionList'],
+      invalidatesTags: (_result, _error, { workflowId }) => [{ type: 'ExecutionList', id: workflowId }],
     }),
 
     /**
@@ -46,7 +41,7 @@ export const executionApi = createApi({
     getExecutions: builder.query<ExecutionRunSummary[], string>({
       query: (workflowId) => ({ url: '/executions', params: { workflowId } }),
       transformResponse: (response: { data: ExecutionRunSummary[] }) => response.data,
-      providesTags: ['ExecutionList'],
+      providesTags: (_result, _error, workflowId) => [{ type: 'ExecutionList', id: workflowId }],
     }),
 
     /**

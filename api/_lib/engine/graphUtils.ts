@@ -125,6 +125,39 @@ export function getDirectParents(
 }
 
 /**
+ * Get target node IDs connected via error edges from the given node.
+ */
+export function getErrorBranchTargets(
+  nodeId: string,
+  edges: { source: string; target: string; data?: { edgeType?: string } }[],
+): string[] {
+  return edges
+    .filter(e => e.source === nodeId && e.data?.edgeType === 'error')
+    .map(e => e.target);
+}
+
+/**
+ * Get all nodes reachable ONLY through normal (non-error) edges from the given node.
+ */
+export function getNormalDownstream(
+  nodeId: string,
+  edges: { source: string; target: string; data?: { edgeType?: string } }[],
+): Set<string> {
+  const normalEdges = edges.filter(e => e.data?.edgeType !== 'error');
+  const directTargets = normalEdges.filter(e => e.source === nodeId).map(e => e.target);
+  const result = new Set<string>();
+  const queue = [...directTargets];
+  let front = 0;
+  while (front < queue.length) {
+    const current = queue[front++];
+    if (result.has(current)) continue;
+    result.add(current);
+    normalEdges.filter(e => e.source === current).forEach(e => queue.push(e.target));
+  }
+  return result;
+}
+
+/**
  * For a conditional branch node, return which downstream nodes belong to the
  * true branch and which belong to the false branch based on edge conditions.
  */
@@ -146,17 +179,20 @@ export function getConditionalBranches(
     }
   }
 
+  // Only follow normal (non-error) edges to avoid error edges causing incorrect shared-node detection
+  const normalEdges = edges.filter(e => e.data?.edgeType !== 'error');
+
   const trueSet = new Set<string>(trueRoots);
   const falseSet = new Set<string>(falseRoots);
 
   for (const root of trueRoots) {
-    for (const downstream of getDownstreamNodes(root, edges)) {
+    for (const downstream of getDownstreamNodes(root, normalEdges)) {
       trueSet.add(downstream);
     }
   }
 
   for (const root of falseRoots) {
-    for (const downstream of getDownstreamNodes(root, edges)) {
+    for (const downstream of getDownstreamNodes(root, normalEdges)) {
       falseSet.add(downstream);
     }
   }

@@ -4,6 +4,8 @@ import { Provider } from 'react-redux';
 import { PersistGate } from 'redux-persist/integration/react';
 import { store, persistor } from '@/app/store';
 import App from '@/App';
+import ClerkProviderWrapper from '@/auth/ClerkProviderWrapper';
+import AuthGate from '@/auth/AuthGate';
 
 // Register all listener middleware side effects (must be imported AFTER store creation).
 import '@/app/listeners';
@@ -21,10 +23,14 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <Provider store={store}>
-      <PersistGate loading={null} persistor={persistor}>
-        <App />
-      </PersistGate>
-    </Provider>
+    <ClerkProviderWrapper>
+      <AuthGate>
+        <Provider store={store}>
+          <PersistGate loading={null} persistor={persistor}>
+            <App />
+          </PersistGate>
+        </Provider>
+      </AuthGate>
+    </ClerkProviderWrapper>
   </StrictMode>,
 );

@@ -3,10 +3,11 @@ import type {
   ServerWorkflowNode,
   ExecutionRun,
   ExecutionCallbacks,
+  ExecutionLog,
   NodeExecutionResult,
 } from './types';
 import { ExecutionContext } from './context';
-import { topologicalSort, getConditionalBranches } from './graphUtils';
+import { topologicalSort, getConditionalBranches, getErrorBranchTargets, getNormalDownstream } from './graphUtils';
 import { runNode } from './runners';
 import { generateId, now } from './utils';
 
@@ -26,6 +27,8 @@ export class ServerWorkflowExecutor {
   private context: ExecutionContext;
   private abortController: AbortController;
   private callbacks: ExecutionCallbacks;
+  private executed = false;
+  private logFn: ((log: ExecutionLog) => void) | null = null;
 
   constructor(callbacks: Partial<ExecutionCallbacks> = {}) {
     this.abortController = new AbortController();
@@ -38,6 +41,11 @@ export class ServerWorkflowExecutor {
     };
   }
 
+  /** Set the userId on the execution context for credential resolution. */
+  setUserId(userId: string): void {
+    this.context.setUserId(userId);
+  }
+
   /**
    * Execute a workflow from start to finish.
    *
@@ -48,6 +56,11 @@ export class ServerWorkflowExecutor {
     workflow: ServerWorkflow,
     triggerData?: Record<string, unknown>,
   ): Promise<ExecutionRun> {
+    if (this.executed) {
+      throw new Error('ServerWorkflowExecutor.execute() has already been called. Create a new instance for each execution.');
+    }
+    this.executed = true;
+
     const runId = generateId('exec');
     const startedAt = now();
 
@@ -66,16 +79,20 @@ export class ServerWorkflowExecutor {
     }
 
     // Set up hard timeout
+    let timedOut = false;
     const timeoutId = setTimeout(() => {
+      timedOut = true;
       this.abortController.abort(new Error('Execution timeout'));
     }, EXECUTION_TIMEOUT_MS);
 
-    // Wire log collection into the run
+    // Wire log collection into the run (use local wrapper to avoid mutating this.callbacks.onLog)
     const originalOnLog = this.callbacks.onLog;
-    this.callbacks.onLog = (log) => {
+    const wrappedOnLog = (log: ExecutionLog) => {
       run.logs.push(log);
       originalOnLog(log);
     };
+    this.logFn = wrappedOnLog;
+    const execCallbacks: Partial<ExecutionCallbacks> = { ...this.callbacks, onLog: wrappedOnLog };
 
     // Build node lookup
     const nodeMap = new Map<string, ServerWorkflowNode>();
@@ -105,9 +122,16 @@ export class ServerWorkflowExecutor {
       for (const nodeId of sortedNodeIds) {
         // Check for abort (timeout or manual cancel)
         if (this.context.isAborted()) {
-          run.status = 'cancelled';
-          run.completedAt = now();
-          this.log('warn', 'Workflow execution was cancelled');
+          if (timedOut) {
+            run.status = 'failed';
+            run.error = `Workflow execution timed out after ${EXECUTION_TIMEOUT_MS}ms`;
+            run.completedAt = now();
+            this.log('error', run.error);
+          } else {
+            run.status = 'cancelled';
+            run.completedAt = now();
+            this.log('warn', 'Workflow execution was cancelled');
+          }
 
           for (const remainingId of sortedNodeIds.slice(sortedNodeIds.indexOf(nodeId))) {
             if (!run.nodeStatuses[remainingId]) {
@@ -157,7 +181,7 @@ export class ServerWorkflowExecutor {
         const execStartTime = Date.now();
 
         try {
-          const output = await runNode(node, this.context, this.callbacks, workflow.edges);
+          const output = await runNode(node, this.context, execCallbacks, workflow.edges);
           const duration = Date.now() - execStartTime;
 
           this.context.setNodeOutput(nodeId, output);
@@ -172,6 +196,14 @@ export class ServerWorkflowExecutor {
           };
           run.nodeStatuses[nodeId] = completeResult;
           this.callbacks.onNodeComplete(nodeId, completeResult);
+
+          // Skip error-branch-only targets (and their transitive downstream) when node succeeds
+          const errorTargets = getErrorBranchTargets(nodeId, workflow.edges);
+          for (const target of errorTargets) {
+            skippedNodes.add(target);
+            const downstream = getNormalDownstream(target, workflow.edges);
+            downstream.forEach(id => skippedNodes.add(id));
+          }
 
           // Handle conditional branching
           if (node.data.type === 'conditionalBranch' && output !== null && typeof output === 'object') {
@@ -195,6 +227,38 @@ export class ServerWorkflowExecutor {
           const duration = Date.now() - execStartTime;
           const errorMessage = error instanceof Error ? error.message : String(error);
 
+          // Check for error branch edges
+          const errorTargets = getErrorBranchTargets(nodeId, workflow.edges);
+
+          if (errorTargets.length > 0) {
+            // Node has error edges — follow error path instead of failing
+            const errorOutput = {
+              error: { message: errorMessage, nodeId, nodeType: node.data.type },
+            };
+            this.context.setNodeOutput(nodeId, errorOutput);
+
+            // Mark node as failed but don't stop workflow
+            run.nodeStatuses[nodeId] = {
+              nodeId,
+              status: 'failed',
+              error: errorMessage,
+              startedAt: nodeStartedAt,
+              completedAt: now(),
+              duration,
+            };
+
+            this.log('info', `Node "${node.data.label}" failed, following error branch`, nodeId);
+
+            // Skip all NORMAL downstream nodes (error branch will still execute)
+            const normalDownstream = getNormalDownstream(nodeId, workflow.edges);
+            for (const skipId of normalDownstream) {
+              skippedNodes.add(skipId);
+            }
+
+            continue; // Don't stop the workflow
+          }
+
+          // No error edges — existing behavior (fail the workflow)
           const failResult: NodeExecutionResult = {
             nodeId,
             status: 'failed',
@@ -249,12 +313,17 @@ export class ServerWorkflowExecutor {
     message: string,
     data?: unknown,
   ): void {
-    this.callbacks.onLog({
+    const logEntry: ExecutionLog = {
       id: generateId('log'),
       timestamp: now(),
       level,
       message,
       data,
-    });
+    };
+    if (this.logFn) {
+      this.logFn(logEntry);
+    } else {
+      this.callbacks.onLog(logEntry);
+    }
   }
 }

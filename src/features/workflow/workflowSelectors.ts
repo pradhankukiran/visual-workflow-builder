@@ -43,13 +43,13 @@ export const selectViewport = createSelector(
 
 /** Select workflow metadata (id, name, description, lastSavedAt). */
 export const selectWorkflowMeta = createSelector(
-  selectWorkflowState,
-  (wf) => ({
-    id: wf.id,
-    name: wf.name,
-    description: wf.description,
-    lastSavedAt: wf.lastSavedAt,
-  }),
+  [
+    (state: RootState) => state.workflow.id,
+    (state: RootState) => state.workflow.name,
+    (state: RootState) => state.workflow.description,
+    (state: RootState) => state.workflow.lastSavedAt,
+  ],
+  (id, name, description, lastSavedAt) => ({ id, name, description, lastSavedAt }),
 );
 
 /** Select whether the workflow has unsaved changes. */
@@ -60,13 +60,13 @@ export const selectWorkflowIsDirty = createSelector(
 
 /** Select sync status for the Header indicator. */
 export const selectSyncStatus = createSelector(
-  selectWorkflowState,
-  (wf) => ({
-    isSyncing: wf.isSyncing,
-    lastSyncedAt: wf.lastSyncedAt,
-    syncError: wf.syncError,
-    isDirty: wf.isDirty,
-  }),
+  [
+    (state: RootState) => state.workflow.isSyncing,
+    (state: RootState) => state.workflow.lastSyncedAt,
+    (state: RootState) => state.workflow.syncError,
+    (state: RootState) => state.workflow.isDirty,
+  ],
+  (isSyncing, lastSyncedAt, syncError, isDirty) => ({ isSyncing, lastSyncedAt, syncError, isDirty }),
 );
 
 /** Select all nodes of a specific type. */

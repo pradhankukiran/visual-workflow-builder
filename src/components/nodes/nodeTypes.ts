@@ -11,6 +11,8 @@ import WebhookTriggerNode from './WebhookTriggerNode';
 import ScheduleTriggerNode from './ScheduleTriggerNode';
 import VariableSetNode from './VariableSetNode';
 import VariableGetNode from './VariableGetNode';
+import LlmNode from './LlmNode';
+import EmailNode from './EmailNode';
 
 /**
  * Maps each NodeType string to its corresponding React Flow custom node component.
@@ -29,4 +31,6 @@ export const nodeTypes: NodeTypes = {
   scheduleTrigger: ScheduleTriggerNode,
   variableSet: VariableSetNode,
   variableGet: VariableGetNode,
+  llm: LlmNode,
+  email: EmailNode,
 };

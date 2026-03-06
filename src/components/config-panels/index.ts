@@ -14,6 +14,8 @@ const WebhookTriggerConfigPanel = lazy(() => import('./WebhookTriggerConfigPanel
 const ScheduleTriggerConfigPanel = lazy(() => import('./ScheduleTriggerConfigPanel'));
 const VariableSetConfigPanel = lazy(() => import('./VariableSetConfigPanel'));
 const VariableGetConfigPanel = lazy(() => import('./VariableGetConfigPanel'));
+const LlmConfigPanel = lazy(() => import('./LlmConfigPanel'));
+const EmailConfigPanel = lazy(() => import('./EmailConfigPanel'));
 
 /**
  * Map of node types to their corresponding config panel components.
@@ -31,6 +33,8 @@ const CONFIG_PANEL_MAP: Record<NodeType, ComponentType> = {
   scheduleTrigger: ScheduleTriggerConfigPanel,
   variableSet: VariableSetConfigPanel,
   variableGet: VariableGetConfigPanel,
+  llm: LlmConfigPanel,
+  email: EmailConfigPanel,
 };
 
 /**

@@ -2,14 +2,14 @@ import { getByPath } from './utils';
 
 /**
  * Regex to match expression templates: {{nodeId.output.path}} or {{$variables.name}}
+ * Non-global version for simple tests; create new RegExp with /g for stateful iteration.
  */
-const EXPRESSION_PATTERN = /\{\{([^}]+)\}\}/g;
+const EXPRESSION_PATTERN = /\{\{([^}]+)\}\}/;
 
 /**
  * Check if a string value contains expression template patterns.
  */
 export function isExpression(value: string): boolean {
-  EXPRESSION_PATTERN.lastIndex = 0;
   return EXPRESSION_PATTERN.test(value);
 }
 
@@ -24,9 +24,20 @@ export class ExecutionContext {
   private nodeOutputs: Map<string, unknown> = new Map();
   private variables: Map<string, unknown> = new Map();
   private abortController: AbortController;
+  private userId?: string;
 
   constructor(abortController: AbortController) {
     this.abortController = abortController;
+  }
+
+  // ─── User Context ───────────────────────────────────────────────────────────
+
+  setUserId(id: string): void {
+    this.userId = id;
+  }
+
+  getUserId(): string | undefined {
+    return this.userId;
   }
 
   // ─── Node Outputs ──────────────────────────────────────────────────────────
@@ -153,8 +164,8 @@ export function evaluateExpression(
   }
 
   // Mixed template: interpolate all expressions as strings
-  EXPRESSION_PATTERN.lastIndex = 0;
-  return template.replace(EXPRESSION_PATTERN, (_fullMatch, expression: string) => {
+  const globalPattern = /\{\{([^}]+)\}\}/g;
+  return template.replace(globalPattern, (_fullMatch, expression: string) => {
     const trimmedExpr = expression.trim();
     const dotIndex = trimmedExpr.indexOf('.');
     let nodeId: string;

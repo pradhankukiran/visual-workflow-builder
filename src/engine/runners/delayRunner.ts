@@ -53,8 +53,8 @@ export async function runDelay(
     actualDuration = config.duration;
   }
 
-  // Ensure non-negative
-  actualDuration = Math.max(0, actualDuration);
+  // Ensure non-negative with 5 minute cap
+  actualDuration = Math.min(Math.max(0, actualDuration), 300_000);
 
   if (actualDuration > 0) {
     await abortableDelay(actualDuration, context.signal);

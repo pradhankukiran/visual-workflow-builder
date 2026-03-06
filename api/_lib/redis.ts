@@ -8,19 +8,24 @@ export const redis = Redis.fromEnv();
 
 // ─── Key Schema ─────────────────────────────────────────────────────────────
 
-const PREFIX = 'vwb:workflow';
-
-/** Sorted set of workflow IDs scored by updatedAt epoch ms. */
-export const WORKFLOW_INDEX_KEY = `${PREFIX}:index`;
+/** Sorted set of workflow IDs for a user, scored by updatedAt epoch ms. */
+export function workflowIndexKey(userId: string): string {
+  return `vwb:user:${userId}:workflow:index`;
+}
 
 /** String (JSON) key for a workflow's metadata. ID must be pre-validated at route level. */
-export function workflowMetaKey(id: string): string {
-  return `${PREFIX}:meta:${id}`;
+export function workflowMetaKey(userId: string, id: string): string {
+  return `vwb:user:${userId}:workflow:meta:${id}`;
 }
 
 /** String (JSON) key for a full workflow document. ID must be pre-validated at route level. */
-export function workflowDataKey(id: string): string {
-  return `${PREFIX}:data:${id}`;
+export function workflowDataKey(userId: string, id: string): string {
+  return `vwb:user:${userId}:workflow:data:${id}`;
+}
+
+/** String key mapping a workflowId to its owner userId (for webhook lookups). */
+export function workflowOwnerKey(workflowId: string): string {
+  return `vwb:workflow:owner:${workflowId}`;
 }
 
 // ─── Execution Keys ─────────────────────────────────────────────────────────
@@ -49,10 +54,57 @@ export function proxyRateKey(ip: string): string {
   return `vwb:proxy:rate:${ip}`;
 }
 
+// ─── Version Keys ──────────────────────────────────────────────────────────
+
+/** Sorted set of version IDs for a workflow, scored by timestamp. */
+export function workflowVersionIndexKey(userId: string, workflowId: string): string {
+  return `vwb:user:${userId}:workflow:versions:${workflowId}`;
+}
+
+/** String (JSON) key for a single workflow version snapshot. */
+export function workflowVersionKey(userId: string, workflowId: string, versionId: string): string {
+  return `vwb:user:${userId}:workflow:version:${workflowId}:${versionId}`;
+}
+
+/** Maximum number of versions stored per workflow. */
+export const MAX_VERSIONS_PER_WORKFLOW = 20;
+
+/** TTL for version data (30 days). */
+export const VERSION_TTL = 2592000;
+
+// ─── Schedule Keys ──────────────────────────────────────────────────────────
+
+/** String key storing the QStash schedule ID for a workflow. ID must be pre-validated at route level. */
+export function scheduleKey(workflowId: string): string {
+  return `vwb:schedule:${workflowId}`;
+}
+
 /** Rate limit prefix for execution requests. */
 export const EXEC_RATE_PREFIX = 'vwb:exec:rate:';
 
 /** Rate limit counter for execution requests, keyed by IP. */
 export function execRateKey(ip: string): string {
   return `${EXEC_RATE_PREFIX}${ip}`;
+}
+
+/** String (JSON) key for durable execution state (Upstash Workflow). */
+export function durableExecStateKey(runId: string): string {
+  return `vwb:exec:durable:${runId}`;
+}
+
+// ─── Credential Keys ─────────────────────────────────────────────────────────
+
+/** String (JSON) key for a single credential. */
+export function credentialKey(userId: string, id: string): string {
+  return `vwb:user:${userId}:cred:${id}`;
+}
+
+/** Sorted set of credential IDs for a user, scored by creation epoch ms. */
+export function credentialIndexKey(userId: string): string {
+  return `vwb:user:${userId}:cred:index`;
+}
+
+/** Rate limit counter for credential requests, keyed by userId. */
+export function credentialRateKey(userId: string): string {
+  return `vwb:cred:rate:${userId}`;
 }

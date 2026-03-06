@@ -5,7 +5,7 @@ import MethodSelector from '@/components/shared/MethodSelector';
 import ExpressionInput from '@/components/shared/ExpressionInput';
 import KeyValueEditor from '@/components/shared/KeyValueEditor';
 import CodeEditor from '@/components/shared/CodeEditor';
-import type { HttpRequestConfig, HttpMethod } from '@/types';
+import type { HttpRequestConfig, HttpMethod, RetryConfig } from '@/types';
 
 function recordToEntries(record: Record<string, string>): Array<{ key: string; value: string }> {
   return Object.entries(record).map(([key, value]) => ({ key, value }));
@@ -168,6 +168,110 @@ export default function HttpRequestConfigPanel() {
           Follow Redirects
         </label>
       </div>
+
+      {/* Retry Settings */}
+      <details className="group">
+        <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] select-none">
+          Retry Settings
+        </summary>
+        <div className="mt-2 space-y-3 pl-1">
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="retryEnabled"
+              checked={config.retry?.enabled ?? false}
+              onChange={(e) =>
+                updateConfig('retry', {
+                  enabled: e.target.checked,
+                  maxRetries: config.retry?.maxRetries ?? 3,
+                  initialDelayMs: config.retry?.initialDelayMs ?? 1000,
+                  backoffMultiplier: config.retry?.backoffMultiplier ?? 2,
+                } satisfies RetryConfig)
+              }
+              className={clsx(
+                'w-4 h-4 rounded-md border border-[var(--color-border)]',
+                'accent-[var(--color-accent)]',
+              )}
+            />
+            <label
+              htmlFor="retryEnabled"
+              className="text-xs text-[var(--color-text)] cursor-pointer select-none"
+            >
+              Enable Retry
+            </label>
+          </div>
+          {config.retry?.enabled && (
+            <>
+              <div className="space-y-1">
+                <label className="block text-[10px] text-[var(--color-text-muted)]">
+                  Max Retries
+                </label>
+                <input
+                  type="number"
+                  value={config.retry.maxRetries}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value, 10);
+                    if (!isNaN(val) && val >= 1)
+                      updateConfig('retry', { ...config.retry!, maxRetries: val });
+                  }}
+                  min={1}
+                  max={10}
+                  className={clsx(
+                    'w-full px-3 py-1.5 rounded-md text-xs',
+                    'bg-[var(--color-surface-elevated)] border border-[var(--color-border)]',
+                    'text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]',
+                    'transition-all-fast',
+                  )}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-[10px] text-[var(--color-text-muted)]">
+                  Initial Delay (ms)
+                </label>
+                <input
+                  type="number"
+                  value={config.retry.initialDelayMs}
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value, 10);
+                    if (!isNaN(val) && val >= 0)
+                      updateConfig('retry', { ...config.retry!, initialDelayMs: val });
+                  }}
+                  min={0}
+                  step={100}
+                  className={clsx(
+                    'w-full px-3 py-1.5 rounded-md text-xs',
+                    'bg-[var(--color-surface-elevated)] border border-[var(--color-border)]',
+                    'text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]',
+                    'transition-all-fast',
+                  )}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="block text-[10px] text-[var(--color-text-muted)]">
+                  Backoff Multiplier
+                </label>
+                <input
+                  type="number"
+                  value={config.retry.backoffMultiplier}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value);
+                    if (!isNaN(val) && val >= 1)
+                      updateConfig('retry', { ...config.retry!, backoffMultiplier: val });
+                  }}
+                  min={1}
+                  step={0.5}
+                  className={clsx(
+                    'w-full px-3 py-1.5 rounded-md text-xs',
+                    'bg-[var(--color-surface-elevated)] border border-[var(--color-border)]',
+                    'text-[var(--color-text)] outline-none focus:border-[var(--color-accent)]',
+                    'transition-all-fast',
+                  )}
+                />
+              </div>
+            </>
+          )}
+        </div>
+      </details>
     </div>
   );
 }

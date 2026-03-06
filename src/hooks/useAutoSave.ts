@@ -5,9 +5,8 @@ import {
   selectWorkflowForSave,
   selectWorkflowMeta,
 } from '@/features/workflow/workflowSelectors';
-import { markSaved } from '@/features/workflow/workflowSlice';
 import { addToast } from '@/features/toast/toastSlice';
-import { useSaveWorkflowMutation } from '@/features/workflowLibrary/workflowLibraryApi';
+import { useSaveWorkflowMutation, useGetWorkflowQuery } from '@/features/workflowLibrary/workflowLibraryApi';
 import { now } from '@/utils/dateUtils';
 
 /**
@@ -30,6 +29,9 @@ export function useAutoSave() {
 
   const [saveWorkflow, { isLoading: isSaving }] = useSaveWorkflowMutation();
 
+  // Read cached workflow data to preserve createdAt
+  const { data: cachedWorkflow } = useGetWorkflowQuery(workflowData.id, { skip: !workflowData.id });
+
   const saveNow = useCallback(async () => {
     try {
       const workflow = {
@@ -39,20 +41,19 @@ export function useAutoSave() {
         nodes: workflowData.nodes,
         edges: workflowData.edges,
         viewport: workflowData.viewport,
-        createdAt: now(),
+        createdAt: cachedWorkflow?.createdAt ?? now(),
         updatedAt: now(),
-        tags: [] as string[],
-        isTemplate: false,
+        tags: cachedWorkflow?.tags ?? ([] as string[]),
+        isTemplate: cachedWorkflow?.isTemplate ?? false,
       };
 
       await saveWorkflow(workflow).unwrap();
-      dispatch(markSaved());
       dispatch(addToast({ type: 'success', message: 'Workflow saved' }));
     } catch (error) {
       console.error('[useAutoSave] Manual save failed:', error);
       dispatch(addToast({ type: 'error', message: 'Failed to save workflow' }));
     }
-  }, [dispatch, workflowData, saveWorkflow]);
+  }, [dispatch, workflowData, saveWorkflow, cachedWorkflow]);
 
   return {
     isSaving,

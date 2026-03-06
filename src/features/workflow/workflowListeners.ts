@@ -9,7 +9,9 @@ import {
   onConnect,
   setNodes,
   setEdges,
-  markSaved,
+  loadSnapshot,
+  setWorkflowMeta,
+  onNodesChange,
 } from './workflowSlice';
 import { selectWorkflowForSave, selectAllNodes, selectAllEdges } from './workflowSelectors';
 import { addToast } from '@/features/toast/toastSlice';
@@ -32,6 +34,9 @@ const isWorkflowMutation = isAnyOf(
   onConnect,
   setNodes,
   setEdges,
+  loadSnapshot,
+  setWorkflowMeta,
+  onNodesChange,
 );
 
 // ─── Auto-save listener (debounced) ──────────────────────────────────────────
@@ -71,7 +76,6 @@ startAppListening({
         workflowLibraryApi.endpoints.saveWorkflow.initiate(workflow),
       ).unwrap();
 
-      listenerApi.dispatch(markSaved());
       listenerApi.dispatch(
         addToast({ type: 'info', message: 'Workflow auto-saved' }),
       );

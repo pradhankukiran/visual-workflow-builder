@@ -4,6 +4,7 @@ import { useNodeConfigPanel } from '@/hooks/useNodeConfigPanel';
 import { useAppSelector } from '@/app/hooks';
 import MethodSelector from '@/components/shared/MethodSelector';
 import KeyValueEditor from '@/components/shared/KeyValueEditor';
+import JsonEditor from '@/components/shared/JsonEditor';
 import type { WebhookTriggerConfig, HttpMethod } from '@/types';
 
 function recordToEntries(record: Record<string, string>): Array<{ key: string; value: string }> {
@@ -27,10 +28,11 @@ export default function WebhookTriggerConfigPanel() {
 
   const config = selectedNode?.data.config as WebhookTriggerConfig | undefined;
   const [copied, setCopied] = useState(false);
+  const [testDataOpen, setTestDataOpen] = useState(false);
 
   const headerEntries = useMemo(
     () => (config ? recordToEntries(config.headers) : []),
-    [config],
+    [config?.headers],
   );
 
   const webhookUrl = useMemo(() => {
@@ -61,8 +63,55 @@ export default function WebhookTriggerConfigPanel() {
     navigator.clipboard.writeText(webhookUrl).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {
+      // Clipboard API unavailable or permission denied — silently ignore
     });
   }, [webhookUrl]);
+
+  const updateTestData = useCallback(
+    (field: string, value: unknown) => {
+      updateConfig('testData', { ...config?.testData, [field]: value });
+    },
+    [updateConfig, config?.testData],
+  );
+
+  const testHeaderEntries = useMemo(
+    () => (config ? recordToEntries(config.testData?.headers ?? {}) : []),
+    [config?.testData?.headers],
+  );
+
+  const testQueryEntries = useMemo(
+    () => (config ? recordToEntries(config.testData?.queryParams ?? {}) : []),
+    [config?.testData?.queryParams],
+  );
+
+  const handleTestMethodChange = useCallback(
+    (method: HttpMethod) => updateTestData('method', method),
+    [updateTestData],
+  );
+
+  const handleTestHeadersChange = useCallback(
+    (entries: Array<{ key: string; value: string }>) => {
+      updateTestData('headers', entriesToRecord(entries));
+    },
+    [updateTestData],
+  );
+
+  const handleTestQueryChange = useCallback(
+    (entries: Array<{ key: string; value: string }>) => {
+      updateTestData('queryParams', entriesToRecord(entries));
+    },
+    [updateTestData],
+  );
+
+  const handleTestBodyChange = useCallback(
+    (body: string) => updateTestData('body', body),
+    [updateTestData],
+  );
+
+  const handleClearTestData = useCallback(() => {
+    updateConfig('testData', undefined);
+  }, [updateConfig]);
 
   if (!selectedNode || !config) return null;
 
@@ -161,6 +210,103 @@ export default function WebhookTriggerConfigPanel() {
           </p>
         </div>
       )}
+
+      {/* Test Data */}
+      <div className="space-y-2">
+        <button
+          type="button"
+          onClick={() => setTestDataOpen((prev) => !prev)}
+          className={clsx(
+            'flex items-center gap-1.5 w-full text-left',
+            'text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]',
+            'hover:text-[var(--color-text)] transition-all-fast',
+          )}
+        >
+          <svg
+            className={clsx(
+              'w-3 h-3 transition-transform',
+              testDataOpen && 'rotate-90',
+            )}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+          Test Data
+        </button>
+
+        {testDataOpen && (
+          <div className="space-y-4 pt-1">
+            <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+              Used when running in browser. Ignored when triggered by real HTTP requests.
+            </p>
+
+            {/* Test Method */}
+            <div className="space-y-2">
+              <label className="block text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+                Test Method
+              </label>
+              <MethodSelector
+                value={config.testData?.method ?? config.method}
+                onChange={handleTestMethodChange}
+              />
+            </div>
+
+            {/* Test Headers */}
+            <div className="space-y-2">
+              <label className="block text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+                Test Headers
+              </label>
+              <KeyValueEditor
+                entries={testHeaderEntries}
+                onChange={handleTestHeadersChange}
+                keyPlaceholder="Header Name"
+                valuePlaceholder="Header Value"
+              />
+            </div>
+
+            {/* Test Query Params */}
+            <div className="space-y-2">
+              <label className="block text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+                Test Query Params
+              </label>
+              <KeyValueEditor
+                entries={testQueryEntries}
+                onChange={handleTestQueryChange}
+                keyPlaceholder="Param Name"
+                valuePlaceholder="Param Value"
+              />
+            </div>
+
+            {/* Test Body */}
+            <div className="space-y-2">
+              <label className="block text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+                Test Body
+              </label>
+              <JsonEditor
+                value={config.testData?.body ?? '{}'}
+                onChange={handleTestBodyChange}
+              />
+            </div>
+
+            {/* Clear Test Data */}
+            <button
+              type="button"
+              onClick={handleClearTestData}
+              className={clsx(
+                'px-3 py-1.5 rounded-md text-[10px] font-medium',
+                'bg-[var(--color-surface)] border border-[var(--color-border)]',
+                'text-[var(--color-text-muted)] hover:text-[var(--color-text)]',
+                'transition-all-fast',
+              )}
+            >
+              Clear Test Data
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

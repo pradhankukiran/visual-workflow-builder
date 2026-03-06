@@ -2,14 +2,18 @@ import { useState, useRef, useCallback, useEffect, type KeyboardEvent, type Chan
 import clsx from 'clsx';
 import { useAppSelector, useAppDispatch } from '@/app/hooks';
 import { setWorkflowMeta } from '@/features/workflow/workflowSlice';
-import { importWorkflow } from '@/features/workflow/workflowActions';
+import { resetApp, importWorkflow } from '@/features/workflow/workflowActions';
 import { selectSyncStatus } from '@/features/workflow/workflowSelectors';
 import { addToast } from '@/features/toast/toastSlice';
 import { useLazyExportWorkflowQuery, useImportWorkflowFileMutation } from '@/features/workflowLibrary/workflowFileApi';
 import { useUndoRedo } from '@/hooks/useUndoRedo';
 import { useAutoSave } from '@/hooks/useAutoSave';
+import { UserButton } from '@clerk/clerk-react';
+import { KeyRound } from 'lucide-react';
 import ThemeToggle from '@/components/shared/ThemeToggle';
 import ExecutionControls from '@/components/execution/ExecutionControls';
+import CredentialManager from '@/components/credentials/CredentialManager';
+import { VersionHistory } from '@/components/versions/VersionHistory';
 
 export default function Header() {
   const dispatch = useAppDispatch();
@@ -25,8 +29,11 @@ export default function Header() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState(workflowName);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
+  const [credentialManagerOpen, setCredentialManagerOpen] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const versionHistoryRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -51,6 +58,18 @@ export default function Header() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [menuOpen]);
+
+  // Close version history on outside click
+  useEffect(() => {
+    if (!versionHistoryOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (versionHistoryRef.current && !versionHistoryRef.current.contains(e.target as Node)) {
+        setVersionHistoryOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [versionHistoryOpen]);
 
   const handleNameSubmit = useCallback(() => {
     const trimmed = editedName.trim();
@@ -86,7 +105,9 @@ export default function Header() {
       dispatch(importWorkflow(workflow));
       dispatch(addToast({ type: 'success', message: `Imported "${workflow.name}"` }));
     } catch (err) {
-      dispatch(addToast({ type: 'error', message: `Import failed: ${(err as { error: string }).error}` }));
+      const importErr = err as { data?: { error?: { message?: string } }; message?: string };
+      const errMsg = importErr?.data?.error?.message ?? importErr?.message ?? 'Unknown error';
+      dispatch(addToast({ type: 'error', message: `Import failed: ${errMsg}` }));
     }
     e.target.value = ''; // Reset for re-import of same file
   }, [dispatch, importFile]);
@@ -112,6 +133,7 @@ export default function Header() {
       setMenuOpen(false);
       switch (action) {
         case 'new':
+          dispatch(resetApp());
           dispatch(addToast({ type: 'info', message: 'New workflow created' }));
           break;
         case 'import':
@@ -208,6 +230,24 @@ export default function Header() {
 
       {/* Right: controls */}
       <div className="flex items-center gap-1 shrink-0">
+        {/* Credentials */}
+        <button
+          onClick={() => setCredentialManagerOpen(true)}
+          className={clsx(
+            'p-2 rounded-md text-sm transition-all-fast',
+            'hover:bg-[var(--color-surface)]',
+            'text-[var(--color-text-muted)]',
+          )}
+          title="Credential Vault"
+          aria-label="Credential Vault"
+        >
+          <KeyRound size={16} />
+        </button>
+        <CredentialManager
+          isOpen={credentialManagerOpen}
+          onClose={() => setCredentialManagerOpen(false)}
+        />
+
         {/* Theme toggle */}
         <ThemeToggle />
 
@@ -248,6 +288,43 @@ export default function Header() {
             <path d="M10 4l3 3-3 3" />
           </svg>
         </button>
+
+        {/* Version History */}
+        <div className="relative" ref={versionHistoryRef}>
+          <button
+            onClick={() => setVersionHistoryOpen((prev) => !prev)}
+            className={clsx(
+              'p-2 rounded-md text-sm transition-all-fast',
+              'hover:bg-[var(--color-surface)]',
+              'text-[var(--color-text-muted)]',
+              versionHistoryOpen && 'bg-[var(--color-surface)]',
+            )}
+            title="Version History"
+            aria-label="Version History"
+            aria-expanded={versionHistoryOpen}
+            aria-haspopup="true"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+              <path d="M3 3v5h5" />
+              <path d="M12 7v5l4 2" />
+            </svg>
+          </button>
+
+          {versionHistoryOpen && (
+            <div
+              className={clsx(
+                'absolute right-0 top-full mt-1 z-50',
+                'w-72 max-h-80 overflow-y-auto rounded-lg shadow-lg',
+                'bg-[var(--color-surface-elevated)]',
+                'border border-[var(--color-border)]',
+                'animate-scale-in',
+              )}
+            >
+              <VersionHistory onClose={() => setVersionHistoryOpen(false)} />
+            </div>
+          )}
+        </div>
 
         {/* Save button */}
         <button
@@ -335,6 +412,9 @@ export default function Header() {
             </div>
           )}
         </div>
+
+        {/* User profile / sign-out */}
+        <UserButton afterSignOutUrl="/" />
       </div>
     </header>
   );
